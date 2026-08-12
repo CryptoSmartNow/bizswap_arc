@@ -59,16 +59,19 @@ contract BizSwapTest is Test {
         returns (BizSwap proxyAs)
     {
         BizSwap impl = new BizSwap();
-        bytes memory initData =
-            abi.encodeCall(BizSwap.initialize, (admin_, minter_, revenue_, usdt_, "BizSwap", "BIZ"));
+        bytes memory initData = abi.encodeCall(BizSwap.initialize, (admin_, minter_, revenue_, usdt_, "BizSwap", "BIZ"));
         ERC1967Proxy proxy = new ERC1967Proxy(address(impl), initData);
         proxyAs = BizSwap(address(proxy));
     }
 
-    function _mint(address to, uint8 instrumentId, uint256 netCents, uint256 entitlementBps, uint64 vestEnd, uint64 yieldStart)
-        internal
-        returns (uint256 tokenId)
-    {
+    function _mint(
+        address to,
+        uint8 instrumentId,
+        uint256 netCents,
+        uint256 entitlementBps,
+        uint64 vestEnd,
+        uint64 yieldStart
+    ) internal returns (uint256 tokenId) {
         vm.prank(minter);
         tokenId = biz.mintCertificate(
             to, instrumentId, netCents, entitlementBps, vestEnd, yieldStart, bytes32("2026-MAY"), "ipfs://bizswap/1"

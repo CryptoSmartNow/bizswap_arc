@@ -3,8 +3,9 @@ pragma solidity ^0.8.24;
 
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {ERC721Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC721/ERC721Upgradeable.sol";
-import {ERC721URIStorageUpgradeable} from
-    "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721URIStorageUpgradeable.sol";
+import {
+    ERC721URIStorageUpgradeable
+} from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721URIStorageUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
@@ -340,7 +341,12 @@ contract BizSwap is
     }
 
     /// @notice Open a BizYield revenue round funded with USDT (escrowed per round).
-    function openYieldRound(uint256 usdtRaw) external onlyRole(DISTRIBUTOR_ROLE) nonReentrant returns (uint256 roundId) {
+    function openYieldRound(uint256 usdtRaw)
+        external
+        onlyRole(DISTRIBUTOR_ROLE)
+        nonReentrant
+        returns (uint256 roundId)
+    {
         if (usdtRaw == 0) revert ZeroAmount();
         IERC20(usdt).safeTransferFrom(msg.sender, address(this), usdtRaw);
 

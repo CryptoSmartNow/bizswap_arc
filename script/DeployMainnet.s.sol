@@ -16,8 +16,7 @@ contract DeployMainnet is Script {
 
         string memory confirm = vm.envString("CONFIRM_MAINNET");
         require(
-            keccak256(bytes(confirm)) == keccak256(bytes("true")),
-            "DeployMainnet: set CONFIRM_MAINNET=true to proceed"
+            keccak256(bytes(confirm)) == keccak256(bytes("true")), "DeployMainnet: set CONFIRM_MAINNET=true to proceed"
         );
 
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
