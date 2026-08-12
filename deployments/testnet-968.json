@@ -1,0 +1,15 @@
+{
+  "chainId": 968,
+  "network": "BOT Testnet",
+  "contract": "BizSwap",
+  "proxy": "",
+  "implementation": "",
+  "usdt": "0x75edC9335175Fc0552D51D48439F229c10420fe3",
+  "admin": "",
+  "minter": "",
+  "revenueWallet": "",
+  "platformFeeBps": 50,
+  "phases": ["phase1-registry", "phase2-distributions"],
+  "deployedAt": "",
+  "txHash": ""
+}
