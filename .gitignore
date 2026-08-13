@@ -1,6 +1,8 @@
 # Foundry
 cache/
-out/
+out/*
+!out/BizSwap.sol/
+!out/BizSwap.sol/BizSwap.json
 broadcast/
 
 # Env
