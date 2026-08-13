@@ -72,6 +72,12 @@ interface IBizSwap {
 
     event YieldRoundOpened(uint256 indexed roundId, uint256 usdtRaw, uint64 openedAt);
 
+    event YieldRoundClosed(uint256 indexed roundId);
+
+    event SchedulesLocked();
+
+    event ClaimsPausedChanged(bool paused);
+
     event Claimed(address indexed to, uint256 indexed tokenId, uint8 instrumentId, uint256 usdtRaw);
 
     error ZeroAddress();
@@ -93,6 +99,9 @@ interface IBizSwap {
     error AlreadyRedeemed();
     error ZeroAmount();
     error InvalidSchedule();
+    error EntitlementTooHigh();
+    error RoundAlreadyClosed();
+    error SchedulesAreLocked();
 
     function PLATFORM_FEE_BPS() external view returns (uint16);
 
@@ -142,6 +151,10 @@ interface IBizSwap {
     function depositDistributionUsdt(uint256 usdtRaw) external;
 
     function openYieldRound(uint256 usdtRaw) external returns (uint256 roundId);
+
+    function closeYieldRound(uint256 roundId) external;
+
+    function lockSchedules() external;
 
     function claim(uint256 tokenId) external returns (uint256 usdtRawPaid);
 
