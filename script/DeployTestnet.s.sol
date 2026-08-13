@@ -51,5 +51,14 @@ contract DeployTestnet is Script {
         console2.log("Minter:           ", minter);
         console2.log("Revenue:          ", revenueWallet);
         console2.log("Fee bps:          ", biz.PLATFORM_FEE_BPS());
+
+        // Automatically update deployments/testnet-968.json
+        string memory jsonPath = "./deployments/testnet-968.json";
+        vm.writeJson(vm.toString(address(proxy)), jsonPath, ".proxy");
+        vm.writeJson(vm.toString(address(impl)), jsonPath, ".implementation");
+        vm.writeJson(vm.toString(admin), jsonPath, ".admin");
+        vm.writeJson(vm.toString(minter), jsonPath, ".minter");
+        vm.writeJson(vm.toString(revenueWallet), jsonPath, ".revenueWallet");
+        vm.writeJson(vm.toString(block.timestamp), jsonPath, ".deployedAt");
     }
 }
