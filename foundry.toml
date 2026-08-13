@@ -7,6 +7,7 @@ optimizer = true
 optimizer_runs = 200
 ffi = false
 via_ir = false
+fs_permissions = [{ access = "read-write", path = "./deployments" }]
 
 [rpc_endpoints]
 bot_testnet = "${BOT_TESTNET_RPC}"
@@ -16,3 +17,4 @@ bot_mainnet = "${BOT_MAINNET_RPC}"
 line_length = 120
 tab_width = 4
 bracket_spacing = false
+
