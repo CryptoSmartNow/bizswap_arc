@@ -63,12 +63,15 @@ contract BizSwap is
     uint8 public bondMaxQuarters;
     uint256 public bondQuarterBps;
 
+    bool public schedulesLocked;
+
     mapping(uint8 => Instrument) private _instruments;
     mapping(uint256 => Certificate) private _certificates;
     mapping(uint256 => YieldRound) private _yieldRounds;
     mapping(uint256 => mapping(uint256 => bool)) private _yieldRoundClaimed;
     mapping(uint256 => uint8) private _nextCreditWeek;
     mapping(uint256 => uint8) private _nextBondQuarter;
+    mapping(uint256 => uint256) private _lastClaimedYieldRound;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -210,6 +213,7 @@ contract BizSwap is
         uint8 bondMaxQuarters_,
         uint256 bondQuarterBps_
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (schedulesLocked) revert SchedulesAreLocked();
         if (creditWeekSeconds_ == 0 || creditWeekCount_ == 0 || creditTotalReturnBps_ == 0) {
             revert InvalidSchedule();
         }
@@ -236,6 +240,12 @@ contract BizSwap is
         );
     }
 
+    /// @notice Permanently lock schedule parameters. One-way operation.
+    function lockSchedules() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        schedulesLocked = true;
+        emit SchedulesLocked();
+    }
+
     function setRevenueWallet(address newRevenueWallet) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newRevenueWallet == address(0)) revert ZeroAddress();
         revenueWallet = newRevenueWallet;
@@ -252,6 +262,7 @@ contract BizSwap is
 
     function setClaimsPaused(bool paused) external onlyRole(DEFAULT_ADMIN_ROLE) {
         claimsPaused = paused;
+        emit ClaimsPausedChanged(paused);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -276,6 +287,7 @@ contract BizSwap is
         if (!inst.configured) revert InstrumentNotConfigured();
         if (inst.currentSupply >= inst.supplyCap) revert CapExceeded();
         if (netAmountCents < inst.minBuyInCents) revert BelowMinBuyIn();
+        if (entitlementBps > BPS_DENOMINATOR) revert EntitlementTooHigh();
 
         uint256 feeCents = quoteFee(instrumentId, netAmountCents);
 
@@ -361,6 +373,16 @@ contract BizSwap is
         emit YieldRoundOpened(roundId, usdtRaw, uint64(block.timestamp));
     }
 
+    /// @notice Mark a yield round as closed (bookkeeping). Does NOT block holder claims.
+    function closeYieldRound(uint256 roundId) external onlyRole(DISTRIBUTOR_ROLE) {
+        YieldRound storage round = _yieldRounds[roundId];
+        if (round.totalUsdtRaw == 0) revert InvalidRound();
+        if (round.closed) revert RoundAlreadyClosed();
+
+        round.closed = true;
+        emit YieldRoundClosed(roundId);
+    }
+
     /// @notice Claim all currently matured unpaid USDT for a certificate.
     function claim(uint256 tokenId) external nonReentrant returns (uint256 usdtRawPaid) {
         if (claimsPaused) revert ClaimsPaused();
@@ -394,11 +416,13 @@ contract BizSwap is
 
     function _claimableYield(uint256 tokenId, Certificate storage cert) internal view returns (uint256 due) {
         if (block.timestamp < cert.yieldStart) return 0;
+        uint256 startRound = _lastClaimedYieldRound[tokenId] + 1;
+        if (startRound == 0) startRound = 1;
         uint256 maxRound = nextYieldRoundId;
-        for (uint256 roundId = 1; roundId < maxRound; ++roundId) {
+        for (uint256 roundId = startRound; roundId < maxRound; ++roundId) {
             if (_yieldRoundClaimed[tokenId][roundId]) continue;
             YieldRound storage round = _yieldRounds[roundId];
-            if (round.totalUsdtRaw == 0 || round.closed) continue;
+            if (round.totalUsdtRaw == 0) continue;
             due += (round.totalUsdtRaw * cert.entitlementBps) / BPS_DENOMINATOR;
         }
     }
@@ -406,21 +430,32 @@ contract BizSwap is
     function _claimYield(uint256 tokenId, Certificate storage cert) internal returns (uint256 due) {
         if (block.timestamp < cert.yieldStart) revert YieldNotStarted();
 
+        uint256 startRound = _lastClaimedYieldRound[tokenId] + 1;
+        if (startRound == 0) startRound = 1;
         uint256 maxRound = nextYieldRoundId;
-        for (uint256 roundId = 1; roundId < maxRound; ++roundId) {
+        uint256 lastClaimed = _lastClaimedYieldRound[tokenId];
+        for (uint256 roundId = startRound; roundId < maxRound; ++roundId) {
             if (_yieldRoundClaimed[tokenId][roundId]) continue;
             YieldRound storage round = _yieldRounds[roundId];
-            if (round.totalUsdtRaw == 0 || round.closed) continue;
+            if (round.totalUsdtRaw == 0) continue;
 
             uint256 share = (round.totalUsdtRaw * cert.entitlementBps) / BPS_DENOMINATOR;
             if (share == 0) {
                 _yieldRoundClaimed[tokenId][roundId] = true;
+                lastClaimed = roundId;
                 continue;
             }
+
+            // Solvency: skip round if it cannot cover this share
+            if (round.claimedUsdtRaw + share > round.totalUsdtRaw) continue;
 
             _yieldRoundClaimed[tokenId][roundId] = true;
             round.claimedUsdtRaw += share;
             due += share;
+            lastClaimed = roundId;
+        }
+        if (lastClaimed > _lastClaimedYieldRound[tokenId]) {
+            _lastClaimedYieldRound[tokenId] = lastClaimed;
         }
     }
 

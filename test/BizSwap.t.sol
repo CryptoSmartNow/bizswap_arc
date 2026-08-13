@@ -324,4 +324,155 @@ contract BizSwapTest is Test {
         assertEq(biz.certificates(tokenId).amountCents, 10_000);
         assertEq(BizSwapV2(address(biz)).version(), "v2");
     }
+
+    // ─── Security Fix 2: entitlementBps bounds ──────────────────────────────
+
+    function test_Mint_EntitlementTooHigh_Reverts() public {
+        // entitlementBps = 10_001 (> BPS_DENOMINATOR) must revert
+        vm.prank(minter);
+        vm.expectRevert(IBizSwap.EntitlementTooHigh.selector);
+        biz.mintCertificate(user, YIELD, 1_000, 10_001, VEST_END, YIELD_START, bytes32("2026-MAY"), "ipfs://x");
+
+        // entitlementBps = 10_000 (exactly 100%) should succeed
+        vm.prank(minter);
+        biz.mintCertificate(user, YIELD, 1_000, 10_000, VEST_END, YIELD_START, bytes32("2026-MAY"), "ipfs://x");
+    }
+
+    // ─── Security Fix 1: yield round solvency guard ─────────────────────────
+
+    function test_YieldClaim_SolvencyGuard_SkipsOverallocated() public {
+        // Mint two certificates each claiming 60% (6000 bps) = 120% total
+        uint256 t1 = _mint(user, YIELD, 1_000, 6_000, VEST_END, YIELD_START);
+        uint256 t2 = _mint(other, YIELD, 1_000, 6_000, VEST_END, YIELD_START);
+        vm.warp(VEST_END);
+        biz.unlock(t1);
+        biz.unlock(t2);
+        vm.warp(YIELD_START);
+
+        uint256 roundRaw = 100e6; // $100
+        _fundYieldRound(roundRaw);
+
+        // User 1 claims 60% = $60
+        uint256 expected1 = (roundRaw * 6_000) / 10_000;
+        vm.prank(user);
+        uint256 paid1 = biz.claim(t1);
+        assertEq(paid1, expected1);
+
+        // User 2 tries to claim 60% but only 40% remains in round
+        // Solvency guard should skip the over-allocated round, resulting in NothingToClaim
+        vm.prank(other);
+        vm.expectRevert(IBizSwap.NothingToClaim.selector);
+        biz.claim(t2);
+    }
+
+    // ─── Security Fix 4: closeYieldRound bookkeeping ────────────────────────
+
+    function test_CloseYieldRound_BookkeepingOnly() public {
+        uint256 tokenId = _mint(user, YIELD, 50_000, 500, VEST_END, YIELD_START);
+        vm.warp(VEST_END);
+        biz.unlock(tokenId);
+        vm.warp(YIELD_START);
+
+        uint256 roundRaw = 1_000e6;
+        uint256 roundId = _fundYieldRound(roundRaw);
+
+        // Close the round — should succeed
+        vm.prank(admin);
+        biz.closeYieldRound(roundId);
+
+        // Verify round is marked closed
+        IBizSwap.YieldRound memory round = biz.yieldRounds(roundId);
+        assertTrue(round.closed);
+
+        // Holder can STILL claim from a closed round (investor funds stay accessible)
+        uint256 expected = (roundRaw * 500) / 10_000;
+        assertEq(biz.claimable(tokenId), expected);
+        vm.prank(user);
+        uint256 paid = biz.claim(tokenId);
+        assertEq(paid, expected);
+    }
+
+    function test_CloseYieldRound_AlreadyClosed_Reverts() public {
+        uint256 roundId = _fundYieldRound(100e6);
+
+        vm.prank(admin);
+        biz.closeYieldRound(roundId);
+
+        // Second close should revert
+        vm.prank(admin);
+        vm.expectRevert(IBizSwap.RoundAlreadyClosed.selector);
+        biz.closeYieldRound(roundId);
+    }
+
+    // ─── Security Fix 5: schedule lock ──────────────────────────────────────
+
+    function test_LockSchedules_PreventsChange() public {
+        // Lock schedules
+        vm.prank(admin);
+        biz.lockSchedules();
+        assertTrue(biz.schedulesLocked());
+
+        // Attempt to change schedules should revert
+        vm.prank(admin);
+        vm.expectRevert(IBizSwap.SchedulesAreLocked.selector);
+        biz.configureSchedules({
+            creditFirstPayment_: 2_000_000,
+            creditWeekSeconds_: 7 days,
+            creditWeekCount_: 12,
+            creditTotalReturnBps_: 10_404,
+            bondQuarterSeconds_: 90 days,
+            bondMaxQuarters_: 8,
+            bondQuarterBps_: 250
+        });
+    }
+
+    // ─── Security Fix 6: claims paused event ────────────────────────────────
+
+    function test_ClaimsPaused_EmitsEvent() public {
+        vm.prank(admin);
+        vm.expectEmit(false, false, false, true, address(biz));
+        emit IBizSwap.ClaimsPausedChanged(true);
+        biz.setClaimsPaused(true);
+
+        vm.prank(admin);
+        vm.expectEmit(false, false, false, true, address(biz));
+        emit IBizSwap.ClaimsPausedChanged(false);
+        biz.setClaimsPaused(false);
+    }
+
+    // ─── Security Fix 3: bounded yield loop cursor ──────────────────────────
+
+    function test_YieldClaim_MultipleRounds_Optimized() public {
+        // Mint a yield certificate with 10% entitlement
+        uint256 tokenId = _mint(user, YIELD, 1_000, 1_000, VEST_END, YIELD_START);
+        vm.warp(VEST_END);
+        biz.unlock(tokenId);
+        vm.warp(YIELD_START);
+
+        // Open 3 rounds
+        uint256 roundRaw = 100e6; // $100 each
+        _fundYieldRound(roundRaw);
+        _fundYieldRound(roundRaw);
+        _fundYieldRound(roundRaw);
+
+        uint256 perRound = (roundRaw * 1_000) / 10_000; // $10 per round
+
+        // Claim round 1 + 2 + 3
+        vm.prank(user);
+        uint256 paid = biz.claim(tokenId);
+        assertEq(paid, perRound * 3);
+
+        // Open round 4
+        _fundYieldRound(roundRaw);
+
+        // Claim round 4 only (cursor should skip past 1-3)
+        vm.prank(user);
+        uint256 paid2 = biz.claim(tokenId);
+        assertEq(paid2, perRound);
+
+        // Nothing left to claim
+        vm.prank(user);
+        vm.expectRevert(IBizSwap.NothingToClaim.selector);
+        biz.claim(tokenId);
+    }
 }
