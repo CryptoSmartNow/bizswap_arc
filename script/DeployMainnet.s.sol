@@ -6,17 +6,18 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 
 import {BizSwap} from "../src/BizSwap.sol";
 
-/// @notice Deploy BizSwap (UUPS) to BOT mainnet (chainId 677).
+/// @notice Deploy BizSwap (UUPS) to Arc Mainnet (chainId 5042).
 contract DeployMainnet is Script {
-    uint256 internal constant CHAIN_ID = 677;
-    address internal constant USDT = 0xaBabc7Ddc03e501d190C676BF3d92ef0e6e87a3C;
+    uint256 internal constant CHAIN_ID = 5042;
+    address internal constant CANONICAL_USDC = 0x3600000000000000000000000000000000000000;
 
     function run() external {
-        require(block.chainid == CHAIN_ID, "DeployMainnet: wrong chainId (expected 677)");
+        require(block.chainid == CHAIN_ID, "DeployMainnet: wrong chainId (expected 5042 for Arc Mainnet)");
 
         string memory confirm = vm.envString("CONFIRM_MAINNET");
         require(
-            keccak256(bytes(confirm)) == keccak256(bytes("true")), "DeployMainnet: set CONFIRM_MAINNET=true to proceed"
+            keccak256(bytes(confirm)) == keccak256(bytes("true")),
+            "DeployMainnet: set CONFIRM_MAINNET=true to proceed (WARNING: Arc Mainnet moves real USDC)"
         );
 
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
@@ -29,7 +30,7 @@ contract DeployMainnet is Script {
 
         BizSwap impl = new BizSwap();
         bytes memory initData =
-            abi.encodeCall(BizSwap.initialize, (deployer, minter, revenueWallet, USDT, "BizSwap", "BIZ"));
+            abi.encodeCall(BizSwap.initialize, (deployer, minter, revenueWallet, CANONICAL_USDC, "BizSwap", "BIZ"));
         ERC1967Proxy proxy = new ERC1967Proxy(address(impl), initData);
         BizSwap biz = BizSwap(address(proxy));
 
@@ -46,20 +47,21 @@ contract DeployMainnet is Script {
 
         vm.stopBroadcast();
 
-        console2.log("Network:          BOT Mainnet");
+        console2.log("Network:          Arc Mainnet");
         console2.log("Chain ID:         ", CHAIN_ID);
         console2.log("Implementation:   ", address(impl));
         console2.log("Proxy (BizSwap):  ", address(proxy));
-        console2.log("USDT:             ", USDT);
+        console2.log("USDC:             ", CANONICAL_USDC);
         console2.log("Admin:            ", admin);
         console2.log("Minter:           ", minter);
         console2.log("Revenue:          ", revenueWallet);
         console2.log("Fee bps:          ", biz.PLATFORM_FEE_BPS());
 
-        // Automatically update deployments/mainnet-677.json
-        string memory jsonPath = "./deployments/mainnet-677.json";
+        // Automatically update deployments/mainnet-5042.json
+        string memory jsonPath = "./deployments/mainnet-5042.json";
         vm.writeJson(vm.toString(address(proxy)), jsonPath, ".proxy");
         vm.writeJson(vm.toString(address(impl)), jsonPath, ".implementation");
+        vm.writeJson(vm.toString(CANONICAL_USDC), jsonPath, ".usdc");
         vm.writeJson(vm.toString(admin), jsonPath, ".admin");
         vm.writeJson(vm.toString(minter), jsonPath, ".minter");
         vm.writeJson(vm.toString(revenueWallet), jsonPath, ".revenueWallet");

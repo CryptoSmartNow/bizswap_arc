@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-/// @notice Converts product USDT cents (2 decimals) to ERC-20 raw units.
+/// @notice Converts product USDC cents (2 decimals) to ERC-20 raw units (6 decimals on Arc).
 library AmountCodec {
     error InvalidDecimals();
 

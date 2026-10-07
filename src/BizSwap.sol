@@ -17,9 +17,12 @@ import {IBizSwap} from "./interfaces/IBizSwap.sol";
 import {AmountCodec} from "./libraries/AmountCodec.sol";
 
 /// @title BizSwap
-/// @notice Upgradeable RWA certificate registry + USDT distributions on BOT Chain.
+/// @notice Upgradeable RWA certificate registry + USDC distributions on Arc Network.
 /// @dev Phase 1: mint/vest/fee. Phase 2: yield rounds, credit weekly, bond quarterly claims.
-///      Purchase funds are off-chain; only distribution USDT is custody'd here.
+///      Purchase funds are off-chain; only distribution USDC is custody'd here.
+///      Arc Dual-Interface Guard: Arc native gas is 18-decimal USDC. BizSwap explicitly interacts
+///      with the 6-decimal ERC-20 USDC interface (canonical predeploy 0x3600000000000000000000000000000000000000)
+///      for all balances and pool accounting, and rejects direct native value transfers.
 contract BizSwap is
     Initializable,
     ERC721Upgradeable,
@@ -44,12 +47,12 @@ contract BizSwap is
     uint8 public constant INSTRUMENT_BIZ_BOND = 2;
 
     address public revenueWallet;
-    address public usdt;
-    uint8 public usdtDecimals;
+    address public usdc;
+    uint8 public usdcDecimals;
     uint256 public nextTokenId;
 
     bool public claimsPaused;
-    uint256 public distributionPoolUsdtRaw;
+    uint256 public distributionPoolUsdcRaw;
     uint256 public nextYieldRoundId;
 
     // Credit schedule (product defaults: Jun 15 2026, 12 weeks, 104.04% total)
@@ -83,11 +86,11 @@ contract BizSwap is
         address admin,
         address minter,
         address revenueWallet_,
-        address usdt_,
+        address usdc_,
         string memory name_,
         string memory symbol_
     ) external initializer {
-        if (admin == address(0) || minter == address(0) || revenueWallet_ == address(0) || usdt_ == address(0)) {
+        if (admin == address(0) || minter == address(0) || revenueWallet_ == address(0) || usdc_ == address(0)) {
             revert ZeroAddress();
         }
 
@@ -103,8 +106,8 @@ contract BizSwap is
         _grantRole(DISTRIBUTOR_ROLE, admin);
 
         revenueWallet = revenueWallet_;
-        usdt = usdt_;
-        usdtDecimals = 6;
+        usdc = usdc_;
+        usdcDecimals = 6;
         nextTokenId = 1;
         nextYieldRoundId = 1;
 
@@ -159,7 +162,7 @@ contract BizSwap is
         grossCents = netAmountCents + quoteFee(instrumentId, netAmountCents);
     }
 
-    function claimable(uint256 tokenId) public view returns (uint256 usdtRaw) {
+    function claimable(uint256 tokenId) public view returns (uint256 usdcRaw) {
         _requireOwned(tokenId);
         Certificate storage cert = _certificates[tokenId];
         if (cert.status == Status.Redeemed) return 0;
@@ -169,12 +172,12 @@ contract BizSwap is
             return _claimableYield(tokenId, cert);
         }
         if (cert.instrumentId == INSTRUMENT_BIZ_CREDIT) {
-            (usdtRaw,) = _creditDue(tokenId, cert);
-            return usdtRaw;
+            (usdcRaw,) = _creditDue(tokenId, cert);
+            return usdcRaw;
         }
         if (cert.instrumentId == INSTRUMENT_BIZ_BOND) {
-            (usdtRaw,) = _bondDue(tokenId, cert);
-            return usdtRaw;
+            (usdcRaw,) = _bondDue(tokenId, cert);
+            return usdcRaw;
         }
         return 0;
     }
@@ -344,23 +347,23 @@ contract BizSwap is
     // Phase 2 — fund + claim
     // ═════════════════════════════════════════════════════════════════════════
 
-    /// @notice Pull USDT into the Credit/Bond distribution pool.
-    function depositDistributionUsdt(uint256 usdtRaw) external onlyRole(DISTRIBUTOR_ROLE) nonReentrant {
-        if (usdtRaw == 0) revert ZeroAmount();
-        IERC20(usdt).safeTransferFrom(msg.sender, address(this), usdtRaw);
-        distributionPoolUsdtRaw += usdtRaw;
-        emit DistributionDeposited(msg.sender, usdtRaw, distributionPoolUsdtRaw);
+    /// @notice Pull USDC into the Credit/Bond distribution pool.
+    function depositDistributionUsdc(uint256 usdcRaw) external onlyRole(DISTRIBUTOR_ROLE) nonReentrant {
+        if (usdcRaw == 0) revert ZeroAmount();
+        IERC20(usdc).safeTransferFrom(msg.sender, address(this), usdcRaw);
+        distributionPoolUsdcRaw += usdcRaw;
+        emit DistributionDeposited(msg.sender, usdcRaw, distributionPoolUsdcRaw);
     }
 
-    /// @notice Open a BizYield revenue round funded with USDT (escrowed per round).
-    function openYieldRound(uint256 usdtRaw)
+    /// @notice Open a BizYield revenue round funded with USDC (escrowed per round).
+    function openYieldRound(uint256 usdcRaw)
         external
         onlyRole(DISTRIBUTOR_ROLE)
         nonReentrant
         returns (uint256 roundId)
     {
-        if (usdtRaw == 0) revert ZeroAmount();
-        IERC20(usdt).safeTransferFrom(msg.sender, address(this), usdtRaw);
+        if (usdcRaw == 0) revert ZeroAmount();
+        IERC20(usdc).safeTransferFrom(msg.sender, address(this), usdcRaw);
 
         roundId = nextYieldRoundId;
         unchecked {
@@ -368,23 +371,23 @@ contract BizSwap is
         }
 
         _yieldRounds[roundId] =
-            YieldRound({totalUsdtRaw: usdtRaw, claimedUsdtRaw: 0, openedAt: uint64(block.timestamp), closed: false});
+            YieldRound({totalUsdcRaw: usdcRaw, claimedUsdcRaw: 0, openedAt: uint64(block.timestamp), closed: false});
 
-        emit YieldRoundOpened(roundId, usdtRaw, uint64(block.timestamp));
+        emit YieldRoundOpened(roundId, usdcRaw, uint64(block.timestamp));
     }
 
     /// @notice Mark a yield round as closed (bookkeeping). Does NOT block holder claims.
     function closeYieldRound(uint256 roundId) external onlyRole(DISTRIBUTOR_ROLE) {
         YieldRound storage round = _yieldRounds[roundId];
-        if (round.totalUsdtRaw == 0) revert InvalidRound();
+        if (round.totalUsdcRaw == 0) revert InvalidRound();
         if (round.closed) revert RoundAlreadyClosed();
 
         round.closed = true;
         emit YieldRoundClosed(roundId);
     }
 
-    /// @notice Claim all currently matured unpaid USDT for a certificate.
-    function claim(uint256 tokenId) external nonReentrant returns (uint256 usdtRawPaid) {
+    /// @notice Claim all currently matured unpaid USDC for a certificate.
+    function claim(uint256 tokenId) external nonReentrant returns (uint256 usdcRawPaid) {
         if (claimsPaused) revert ClaimsPaused();
 
         address owner = _requireOwned(tokenId);
@@ -395,19 +398,19 @@ contract BizSwap is
         if (cert.status == Status.Vesting) revert StillVesting();
 
         if (cert.instrumentId == INSTRUMENT_BIZ_YIELD) {
-            usdtRawPaid = _claimYield(tokenId, cert);
+            usdcRawPaid = _claimYield(tokenId, cert);
         } else if (cert.instrumentId == INSTRUMENT_BIZ_CREDIT) {
-            usdtRawPaid = _claimCredit(tokenId, cert);
+            usdcRawPaid = _claimCredit(tokenId, cert);
         } else if (cert.instrumentId == INSTRUMENT_BIZ_BOND) {
-            usdtRawPaid = _claimBond(tokenId, cert);
+            usdcRawPaid = _claimBond(tokenId, cert);
         } else {
             revert InvalidInstrument();
         }
 
-        if (usdtRawPaid == 0) revert NothingToClaim();
+        if (usdcRawPaid == 0) revert NothingToClaim();
 
-        IERC20(usdt).safeTransfer(owner, usdtRawPaid);
-        emit Claimed(owner, tokenId, cert.instrumentId, usdtRawPaid);
+        IERC20(usdc).safeTransfer(owner, usdcRawPaid);
+        emit Claimed(owner, tokenId, cert.instrumentId, usdcRawPaid);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -422,8 +425,8 @@ contract BizSwap is
         for (uint256 roundId = startRound; roundId < maxRound; ++roundId) {
             if (_yieldRoundClaimed[tokenId][roundId]) continue;
             YieldRound storage round = _yieldRounds[roundId];
-            if (round.totalUsdtRaw == 0) continue;
-            due += (round.totalUsdtRaw * cert.entitlementBps) / BPS_DENOMINATOR;
+            if (round.totalUsdcRaw == 0) continue;
+            due += (round.totalUsdcRaw * cert.entitlementBps) / BPS_DENOMINATOR;
         }
     }
 
@@ -437,9 +440,9 @@ contract BizSwap is
         for (uint256 roundId = startRound; roundId < maxRound; ++roundId) {
             if (_yieldRoundClaimed[tokenId][roundId]) continue;
             YieldRound storage round = _yieldRounds[roundId];
-            if (round.totalUsdtRaw == 0) continue;
+            if (round.totalUsdcRaw == 0) continue;
 
-            uint256 share = (round.totalUsdtRaw * cert.entitlementBps) / BPS_DENOMINATOR;
+            uint256 share = (round.totalUsdcRaw * cert.entitlementBps) / BPS_DENOMINATOR;
             if (share == 0) {
                 _yieldRoundClaimed[tokenId][roundId] = true;
                 lastClaimed = roundId;
@@ -447,10 +450,10 @@ contract BizSwap is
             }
 
             // Solvency: skip round if it cannot cover this share
-            if (round.claimedUsdtRaw + share > round.totalUsdtRaw) continue;
+            if (round.claimedUsdcRaw + share > round.totalUsdcRaw) continue;
 
             _yieldRoundClaimed[tokenId][roundId] = true;
-            round.claimedUsdtRaw += share;
+            round.claimedUsdcRaw += share;
             due += share;
             lastClaimed = roundId;
         }
@@ -469,7 +472,7 @@ contract BizSwap is
 
         uint256 totalPayoutCents = (cert.amountCents * creditTotalReturnBps) / BPS_DENOMINATOR;
         uint256 weeklyCents = totalPayoutCents / creditWeekCount;
-        uint256 weeklyRaw = AmountCodec.centsToRaw(weeklyCents, usdtDecimals);
+        uint256 weeklyRaw = AmountCodec.centsToRaw(weeklyCents, usdcDecimals);
 
         for (uint8 w = start; w < creditWeekCount; ++w) {
             uint64 payTime = creditFirstPayment + uint64(uint256(w) * uint256(creditWeekSeconds));
@@ -482,9 +485,9 @@ contract BizSwap is
     function _claimCredit(uint256 tokenId, Certificate storage cert) internal returns (uint256 dueRaw) {
         (uint256 due, uint8 weeksToPay) = _creditDue(tokenId, cert);
         if (due == 0) return 0;
-        if (due > distributionPoolUsdtRaw) revert InsufficientPool();
+        if (due > distributionPoolUsdcRaw) revert InsufficientPool();
 
-        distributionPoolUsdtRaw -= due;
+        distributionPoolUsdcRaw -= due;
         _nextCreditWeek[tokenId] = _nextCreditWeek[tokenId] + weeksToPay;
         dueRaw = due;
 
@@ -505,7 +508,7 @@ contract BizSwap is
         if (start >= bondMaxQuarters) return (0, 0);
 
         uint256 quarterCents = (cert.amountCents * bondQuarterBps) / BPS_DENOMINATOR;
-        uint256 quarterRaw = AmountCodec.centsToRaw(quarterCents, usdtDecimals);
+        uint256 quarterRaw = AmountCodec.centsToRaw(quarterCents, usdcDecimals);
 
         for (uint8 q = start; q < bondMaxQuarters; ++q) {
             uint64 payTime = cert.yieldStart + uint64(uint256(q) * uint256(bondQuarterSeconds));
@@ -520,9 +523,9 @@ contract BizSwap is
 
         (uint256 due, uint8 quartersToPay) = _bondDue(tokenId, cert);
         if (due == 0) return 0;
-        if (due > distributionPoolUsdtRaw) revert InsufficientPool();
+        if (due > distributionPoolUsdcRaw) revert InsufficientPool();
 
-        distributionPoolUsdtRaw -= due;
+        distributionPoolUsdcRaw -= due;
         _nextBondQuarter[tokenId] = _nextBondQuarter[tokenId] + quartersToPay;
         dueRaw = due;
 

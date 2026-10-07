@@ -1,15 +1,16 @@
-# BizSwap — BOT Chain Technical Specification & Documentation
+# BizSwap — Arc Network Technical Specification & Documentation
 
-Upgradeable Solidity implementation of **BizSwap** RWA instruments on **BOT Chain**.
+Upgradeable Solidity implementation of **BizSwap** Real World Asset (RWA) instruments on **Arc Network**.
 
-| Item | Value |
-|------|--------|
-| **Network** | BOT Chain Testnet (968) → Mainnet (677) |
-| **Contract** | `BizSwap` (UUPS upgradeable ERC-721 orchestrator) |
-| **Stablecoin** | **USDT only** (official BOT USDT) |
-| **Collection** | ERC-721 name `BizSwap`, symbol `BIZ` |
-| **Phases** | Phase 1 (registry) + Phase 2 (USDT distributions) |
-| **Repo scope** | Contracts, Foundry tests, deploy/smoke scripts |
+| Item                 | Value                                                                                          |
+| -------------------- | ---------------------------------------------------------------------------------------------- |
+| **Network**          | Arc Testnet (5042002) → Arc Mainnet (5042)                                                     |
+| **Contract**         | `BizSwap` (UUPS upgradeable ERC-721 orchestrator)                                              |
+| **Gas Token**        | **USDC** (Native 18 decimals, deterministic sub-second finality)                               |
+| **Stablecoin Asset** | **USDC** (Canonical ERC-20 predeploy `0x3600000000000000000000000000000000000000`, 6 decimals) |
+| **Collection**       | ERC-721 name `BizSwap`, symbol `BIZ`                                                           |
+| **Phases**           | Phase 1 (registry & vesting) + Phase 2 (USDC distributions)                                    |
+| **Tooling**          | Arc Foundry (`arc-forge`, `arc-cast`, `arc-anvil`) / Standard Foundry                          |
 
 ---
 
@@ -17,288 +18,244 @@ Upgradeable Solidity implementation of **BizSwap** RWA instruments on **BOT Chai
 
 The project adopts a **Central Orchestrator Pattern**. A single upgradeable contract, **`BizSwap`**, manages the full lifecycle of three instrument types: **BizYield**, **BizCredit**, and **BizBond**.
 
-Users and backends always interact with the **ERC1967 proxy** address. The implementation can be upgraded via UUPS without changing that address.
+Users and backend systems always interact with the **ERC1967 proxy** address. The implementation can be upgraded via UUPS without altering the canonical proxy address.
 
-### Data Modeling (EVM storage)
+```mermaid
+flowchart TD
+    subgraph Arc Network
+        USDC_Predeploy["Canonical USDC Predeploy<br/><code>0x3600000000000000000000000000000000000000</code>"]
+        NativeGas["USDC Native Gas (18 decimals)<br/>Used for gas fees & sub-second execution"]
+    end
 
-Solana PDAs map to ordinary contract storage:
+    subgraph BizSwap System
+        Proxy["BizSwap ERC1967 Proxy"]
+        Impl["BizSwap Implementation (UUPS)"]
+        YieldRounds["BizYield Revenue Rounds (USDC)"]
+        CreditSchedules["BizCredit 12-Week Waterfall (USDC)"]
+        BondSchedules["BizBond Quarterly Coupons (USDC)"]
+    end
 
-| Solana concept | BOT / Solidity equivalent |
-|----------------|---------------------------|
-| Program | `BizSwap` implementation + proxy |
-| `GlobalConfig` PDA | Contract fields: roles, `revenueWallet`, `usdt` |
-| `InstrumentConfig` PDA ×3 | `mapping(uint8 => Instrument) instruments` |
-| `CertificateRecord` PDA | `mapping(uint256 => Certificate) certificates` + ERC-721 ownership |
-| SPL mint + Metaplex | ERC-721 `tokenId` + `tokenURI` |
-| Token freeze / thaw | Vesting status + `_update` transfer lock / `unlock()` |
+    Proxy --> Impl
+    Impl --> YieldRounds
+    Impl --> CreditSchedules
+    Impl --> BondSchedules
+    USDC_Predeploy -->|"depositDistributionUsdc / openYieldRound"| Impl
+    Impl -->|"claim (safeTransfer)"| CertificateHolders["Certificate Holders"]
+    NativeGas -.->|"Gas Payments"| Impl
+```
 
-#### Global config (roles & pointers)
+### Data Modeling & Storage
 
-- **`DEFAULT_ADMIN_ROLE`**: instrument setup, schedules, pause, upgrades, revenue wallet.
-- **`MINTER_ROLE`**: backend hot key for `mintCertificate` only.
-- **`DISTRIBUTOR_ROLE`**: fund distribution pool / open yield rounds.
-- **`revenueWallet`**: treasury pointer (purchase funds still settle off-chain in Phase 1).
-- **`usdt`**: official BOT USDT token address for this network (distributions only).
+| Concept            | Arc / Solidity Implementation                                      |
+| ------------------ | ------------------------------------------------------------------ |
+| Program            | `BizSwap` implementation + ERC1967 proxy                           |
+| Global Config      | Contract fields: roles, `revenueWallet`, `usdc`, `usdcDecimals`    |
+| Instrument Config  | `mapping(uint8 => Instrument) instruments`                         |
+| Certificate Record | `mapping(uint256 => Certificate) certificates` + ERC-721 ownership |
+| NFT Token          | ERC-721 `tokenId` + `tokenURI`                                     |
+| Transfer Lock      | Vesting status + `_update` transfer lock / `unlock()`              |
 
-#### Instrument config (`instruments[id]`)
+#### Global Config (Roles & Pointers)
 
-- `id`: `0` BizYield, `1` BizCredit, `2` BizBond  
-- `supplyCap` / `currentSupply` (default cap **1,000** per instrument)  
-- `minBuyInCents` (USDT cents, 2 decimals)  
-- `totalInvestedCents` / `totalFeesCents`  
+- **`DEFAULT_ADMIN_ROLE`**: Instrument setup, schedule configuration, pauses, UUPS upgrades, revenue wallet updates.
+- **`MINTER_ROLE`**: Backend hot key for `mintCertificate` only.
+- **`DISTRIBUTOR_ROLE`**: Funds distribution pool (`depositDistributionUsdc`) and opens yield rounds (`openYieldRound`).
+- **`revenueWallet`**: Treasury pointer (off-chain purchase funds settle here in Phase 1).
+- **`usdc`**: Canonical Arc USDC ERC-20 predeploy (`0x3600000000000000000000000000000000000000`).
 
-Default min buy-ins:
+#### Arc Stablecoin-Native Model
 
-| ID | Instrument | Min buy-in |
-|----|------------|------------|
-| 0 | BizYield | $10 → `1_000` cents |
-| 1 | BizCredit | $100 → `10_000` cents |
-| 2 | BizBond | $1,000 → `100_000` cents |
+On Arc, the native gas token is USDC, and the native balance and the ERC-20 USDC interface are the **same pool of funds**:
 
-#### Certificate record (`certificates[tokenId]`)
+- **Native view (18 decimals)**: Used for gas fees and `msg.value`.
+- **ERC-20 view (6 decimals)**: At `0x3600000000000000000000000000000000000000`. Used for all BizSwap distribution deposits, pool tracking, and holder claims.
+- **Dual-Interface Guard**: BizSwap enforces non-payable execution and rejects raw native transfers to prevent accidental native balance locking.
+
+#### Instrument Config (`instruments[id]`)
+
+- `id`: `0` BizYield, `1` BizCredit, `2` BizBond
+- `supplyCap` / `currentSupply` (default cap **1,000** per instrument)
+- `minBuyInCents` (USDC cents, 2 decimals)
+- `totalInvestedCents` / `totalFeesCents`
+
+Default minimum buy-ins:
+
+| ID  | Instrument | Min Buy-In               |
+| --- | ---------- | ------------------------ |
+| 0   | BizYield   | $10 → `1_000` cents      |
+| 1   | BizCredit  | $100 → `10_000` cents    |
+| 2   | BizBond    | $1,000 → `100_000` cents |
+
+#### Certificate Record (`certificates[tokenId]`)
 
 Per-purchase terms stored on-chain:
 
-- `instrumentId`, `amountCents` (net principal), `feeCents`  
-- `entitlementBps` (BizYield share of each revenue round; 10_000 = 100%)  
-- `purchaseTime`, `vestEnd`, `yieldStart`  
-- `status`: `Vesting` \| `Active` \| `Redeemed`  
-- `serial`, `cycle`  
+- `instrumentId`, `amountCents` (net principal), `feeCents`
+- `entitlementBps` (BizYield share of each revenue round; 10,000 = 100%)
+- `purchaseTime`, `vestEnd`, `yieldStart`
+- `status`: `Vesting` | `Active` | `Redeemed`
+- `serial`, `cycle`
 
-Ownership source of truth: **`ownerOf(tokenId)`** (ERC-721).
+Source of truth for ownership: **`ownerOf(tokenId)`** (ERC-721 standard).
 
 ---
 
 ## 2. Technical Workflow
 
-### Phase 1 — Minting pipeline
+### Phase 1 — Minting Pipeline
 
-`mintCertificate` is called by **`MINTER_ROLE` only** (backend after payment confirmation):
+`mintCertificate` is invoked by **`MINTER_ROLE` only** (backend after payment confirmation):
 
-1. **Validation**: minter role, instrument configured, supply &lt; cap, amount ≥ min buy-in, non-empty URI, non-zero recipient.
-2. **Fee accounting**:  
-   - **BizYield & BizBond**: `feeCents = net * 50 / 10_000` (0.5% **on top** of net).  
-   - **BizCredit**: `feeCents = 0`.  
-   - Certificate principal and entitlements use **net only**.
-3. **State**: increment supply / totals; assign sequential `tokenId` and per-instrument `serial`.
+1. **Validation**: Minter role, instrument configured, supply < cap, amount ≥ min buy-in, non-empty URI, recipient != `address(0)`.
+2. **Fee Accounting**:
+   - **BizYield & BizBond**: `feeCents = net * 50 / 10_000` (0.5% **on top** of net).
+   - **BizCredit**: `feeCents = 0`.
+   - Certificate principal and entitlement calculations strictly use **net cents**.
+3. **State Mutation**: Increments current supply and totals; allocates sequential `tokenId` and per-instrument `serial`.
 4. **Status**: BizCredit → `Active`; BizYield / BizBond → `Vesting`.
 5. **ERC-721**: `_safeMint` + `_setTokenURI`.
-6. **Event**: `CertificateMinted`.
+6. **Event**: Emits `CertificateMinted`.
 
-Purchase funds (fiat / stablecoin via ChainRails or ops) **do not enter the contract** on mint. Only **distribution USDT** is held for Phase 2 claims.
+> Purchase funds settle off-chain (or into the treasury `revenueWallet`). The `BizSwap` contract only holds **distribution USDC** for Phase 2 claims.
 
-### Phase 1 — Lifecycle (vesting unlock)
+### Phase 1 — Lifecycle (Vesting Unlock)
 
 `unlock(tokenId)` is **permissionless**:
 
-- If status is `Vesting` and `block.timestamp >= vestEnd` → set `Active`, emit `CertificateUnlocked`.
-- While `Vesting`, all transfers/burns revert (`TransferWhileVesting`).
-- Already `Active` / `Redeemed`: no-op success for unlock.
+- If status is `Vesting` and `block.timestamp >= vestEnd` → sets status to `Active`, emits `CertificateUnlocked`.
+- While `Vesting`, all ERC-721 transfers/burns revert (`TransferWhileVesting`).
+- Already `Active` / `Redeemed`: No-op success.
 
-### Phase 2 — Distributions (USDT only)
+### Phase 2 — USDC Distributions
 
-| Instrument | Funding | Claim math |
-|------------|---------|------------|
-| **BizYield** | `openYieldRound(usdtRaw)` | `roundTotal * entitlementBps / 10_000` once per round |
-| **BizCredit** | `depositDistributionUsdt` | 12 weekly installments totaling **104.04%** of principal |
-| **BizBond** | `depositDistributionUsdt` | **2.5%** of principal per quarter (default 8 quarters) |
+| Instrument    | Funding Mechanism                  | Claim Calculation                                        |
+| ------------- | ---------------------------------- | -------------------------------------------------------- |
+| **BizYield**  | `openYieldRound(usdcRaw)`          | `roundTotal * entitlementBps / 10_000` once per round    |
+| **BizCredit** | `depositDistributionUsdc(usdcRaw)` | 12 weekly installments totaling **104.04%** of principal |
+| **BizBond**   | `depositDistributionUsdc(usdcRaw)` | **2.5%** of principal per quarter (default 8 quarters)   |
 
-- `claim(tokenId)`: owner-only; pays USDT to the certificate owner.  
-- Requires `Active` (unlock first for Yield/Bond).  
-- Credit/Bond schedules complete → status `Redeemed`.  
-- Admin can `setClaimsPaused(true)`.
+- `claim(tokenId)`: Callable by certificate owner only; transfers 6-decimal USDC directly to owner.
+- Requires `Active` status (Yield/Bond must be unlocked after vesting).
+- Solvency Guard: Credit/Bond claims revert (`InsufficientPool`) if distribution pool balance is insufficient; Yield rounds protect round allocations.
+- Admin emergency stop: `setClaimsPaused(true)` with emitted event.
 
-Default schedule config (set in `initialize`, overridable via `configureSchedules`):
+Schedule parameters:
 
-- Credit first payment: **2026-06-15 00:00:00 UTC**  
-- Credit: 12 × 7-day weeks, `creditTotalReturnBps = 10404`  
-- Bond: 90-day quarters, `bondQuarterBps = 250`, max 8 quarters  
-
-USDT raw units use **6 decimals**. Product amounts use **cents** (2 decimals):  
-`raw = cents * 10^(decimals - 2)` → typically `cents * 10_000`.
+- Credit first payment default: **2026-06-15 00:00:00 UTC** (`1_781_481_600`)
+- Credit: 12 × 7-day weeks, `creditTotalReturnBps = 10404`
+- Bond: 90-day quarters, `bondQuarterBps = 250`, max 8 quarters
 
 ---
 
-## 3. Security Implementation
+## 3. Network & Configuration
 
-Hardened for common EVM / upgradeable-contract risks:
-
-- **Access control**: OpenZeppelin `AccessControlUpgradeable`; privileged paths use `msg.sender` roles (never `tx.origin`).
-- **Separation of powers**: admin vs minter vs distributor vs `revenueWallet` pointer.
-- **Vesting lock on-chain**: enforced in ERC-721 `_update`, not a soft UI flag.
-- **Checked arithmetic**: Solidity 0.8.x; custom errors for reverts.
-- **Reentrancy**: `ReentrancyGuardUpgradeable` on USDT deposit/claim paths.
-- **SafeERC20**: all USDT transfers.
-- **CEI**: claim progress updated before USDT transfer.
-- **UUPS**: `_disableInitializers()` on implementation; `_authorizeUpgrade` admin-only.
-- **Pool solvency**: Credit/Bond claims revert if distribution pool is insufficient.
-- **Deploy scripts**: initialize + configure instruments in one broadcast; optional admin handoff.
+| Parameter          | Arc Testnet                                                | Arc Mainnet                                  |
+| ------------------ | ---------------------------------------------------------- | -------------------------------------------- |
+| **Chain ID**       | `5042002` (`0x4CEF52`)                                     | `5042` (`0x13B2`)                            |
+| **RPC URL**        | `https://rpc.testnet.arc.io`                               | `https://rpc.mainnet.arc.io`                 |
+| **WebSocket**      | `wss://rpc.testnet.arc.io`                                 | `wss://rpc.mainnet.arc.io`                   |
+| **Explorer**       | [explorer.testnet.arc.io](https://explorer.testnet.arc.io) | [explorer.arc.io](https://explorer.arc.io)   |
+| **Faucet**         | [faucet.circle.com](https://faucet.circle.com)             | N/A (fund with real USDC)                    |
+| **USDC Predeploy** | `0x3600000000000000000000000000000000000000`               | `0x3600000000000000000000000000000000000000` |
+| **Gas Pricing**    | Min base fee 20 Gwei (EWMA smoothed)                       | Min base fee 20 Gwei (EWMA smoothed)         |
+| **Finality**       | Sub-second deterministic                                   | Sub-second deterministic                     |
 
 ---
 
-## 4. Engineering Best Practices
+## 4. Development & Testing
 
-- **Solidity `^0.8.24`** + OpenZeppelin Contracts / Upgradeable **v5**.
-- **Foundry** for unit tests (`vm.prank`, `vm.warp`) and forge scripts.
-- **Precision**: financial product values in **USDT cents**; on-chain payouts in **USDT raw** via `AmountCodec`.
-- **Basis points**: fee and entitlements use `10_000 = 100%`.
-- **Idiomatic EVM**: single ERC-721 collection; instrument type in storage; events for indexers.
-- **Upgradeable storage**: append new fields carefully; prefer upgrade tests when changing implementation.
-- **Repo scope**: contracts + tests + scripts only (no backend/frontend in this package).
+### Prerequisites
 
----
+- [Arc Foundry](https://github.com/circlefin/arc-foundry) (`arc-forge`, `arc-cast`, `arc-anvil`) or standard Foundry
+- OpenZeppelin Contracts Upgradeable v5
 
-## 5. Development & Deployment
+### Build and Test
 
-### Dependencies
-
-- [Foundry](https://book.getfoundry.sh/) (`forge`, `cast`)
-- OpenZeppelin contracts (via `lib/`)
-- RPC access to BOT testnet/mainnet for deploy
-
-### Networks
-
-| Network | Chain ID | RPC | Explorer | USDT |
-|---------|----------|-----|----------|------|
-| **Testnet** | 968 | `https://rpc.bohr.life` | [scan.bohr.life](https://scan.bohr.life) | `0x75edC9335175Fc0552D51D48439F229c10420fe3` |
-| **Mainnet** | 677 | `https://rpc.botchain.ai` | [scan.botchain.ai](https://scan.botchain.ai) | `0xaBabc7Ddc03e501d190C676BF3d92ef0e6e87a3C` |
-
-Gas token: **BOT** (tBOT on testnet — [faucet](https://faucet.botchain.ai/basic)).
-
-### Build & test
+Run with Arc Foundry targeting Arc's Osaka EVM runtime:
 
 ```bash
-cd bizswap_botchain
-forge build
+# Test with Arc Foundry on Arc network
+arc-forge test --network arc -vv
+
+# Or with standard Forge
 forge test -vv
 ```
 
-### Environment
+### Environment Configuration
 
 ```bash
 cp .env.example .env
 ```
 
-| Variable | Purpose |
-|----------|---------|
-| `DEPLOYER_PRIVATE_KEY` | Pays gas; bootstraps admin during deploy |
-| `ADMIN` | Final admin address (after handoff) |
-| `MINTER` | Backend mint authority |
-| `REVENUE_WALLET` | Treasury pointer |
-| `BOT_TESTNET_RPC` / `BOT_MAINNET_RPC` | JSON-RPC endpoints |
-| `CONFIRM_MAINNET` | Must be `true` for mainnet deploy |
-| `PROXY_ADDRESS` | For upgrade / smoke scripts |
+| Variable               | Description                                    |
+| ---------------------- | ---------------------------------------------- |
+| `DEPLOYER_PRIVATE_KEY` | Deployer key (must hold USDC for gas on Arc)   |
+| `ADMIN`                | Final admin address (after deployment handoff) |
+| `MINTER`               | Backend authority for `mintCertificate`        |
+| `REVENUE_WALLET`       | Platform fee and treasury pointer              |
+| `ARC_TESTNET_RPC_URL`  | `https://rpc.testnet.arc.io`                   |
+| `ARC_MAINNET_RPC_URL`  | `https://rpc.mainnet.arc.io`                   |
+| `CANONICAL_USDC`       | `0x3600000000000000000000000000000000000000`   |
+| `CONFIRM_MAINNET`      | Must be `true` to broadcast on Arc Mainnet     |
+| `PROXY_ADDRESS`        | Address of deployed BizSwap ERC1967 proxy      |
 
 ### Deployment
 
-Deploy **implementation + proxy**, configure three instruments, hand off admin if needed:
+Deploy implementation + proxy, initialize instruments, and configure roles:
 
 ```bash
-# Testnet (968)
+#load environmental variables first
+source .env
+
+# Arc Testnet (5042002)
 forge script script/DeployTestnet.s.sol:DeployTestnet \
-  --rpc-url $BOT_TESTNET_RPC --broadcast
+  --rpc-url $ARC_TESTNET_RPC_URL --broadcast
 
-# Mainnet (677) — requires CONFIRM_MAINNET=true
+# Arc Mainnet (5042) — requires CONFIRM_MAINNET=true
 forge script script/DeployMainnet.s.sol:DeployMainnet \
-  --rpc-url $BOT_MAINNET_RPC --broadcast
+  --rpc-url $ARC_MAINNET_RPC_URL --broadcast
 ```
 
-Record the **proxy** address in `deployments/testnet-968.json` or `deployments/mainnet-677.json`.
+Deployment metadata is saved to `deployments/testnet-5042002.json` or `deployments/mainnet-5042.json`.
 
-### Upgrade
-
-```bash
-PROXY_ADDRESS=0x... forge script script/Upgrade.s.sol:Upgrade \
-  --rpc-url $RPC --broadcast
-```
-
-### Smoke checks
+### Smoke Tests
 
 ```bash
+# Testnet
 PROXY_ADDRESS=0x... forge script script/SmokeTestnet.s.sol:SmokeTestnet \
-  --rpc-url $BOT_TESTNET_RPC
+  --rpc-url $ARC_TESTNET_RPC_URL
 
+# Mainnet
 PROXY_ADDRESS=0x... forge script script/SmokeMainnet.s.sol:SmokeMainnet \
-  --rpc-url $BOT_MAINNET_RPC
-```
-
-### Project layout
-
-```text
-bizswap_botchain/
-├── src/
-│   ├── BizSwap.sol
-│   ├── interfaces/IBizSwap.sol
-│   ├── libraries/AmountCodec.sol
-│   └── mocks/MockUSDT.sol
-├── test/BizSwap.t.sol
-├── script/
-│   ├── DeployTestnet.s.sol
-│   ├── DeployMainnet.s.sol
-│   ├── Upgrade.s.sol
-│   ├── SmokeTestnet.s.sol
-│   └── SmokeMainnet.s.sol
-├── deployments/
-├── foundry.toml
-└── ROADMAP.md
+  --rpc-url $ARC_MAINNET_RPC_URL
 ```
 
 ---
 
-## 6. Frontend / Client Integration Guide (EVM)
+## 5. Frontend & Client Integration (viem & wagmi)
 
-This section is for teams integrating a Next.js (or other) app with **BizSwap on BOT Chain**. Prefer **wagmi + viem** (or ethers.js). MetaMask and BO Wallet are supported BOT wallets.
+Arc is natively integrated into `viem/chains`. No custom chain definitions are required.
 
-### 1. Installation & setup
+### 1. Installation
 
 ```bash
 npm install viem wagmi @tanstack/react-query
 ```
 
-Add BOT networks to the wallet (or use ChainList for mainnet 677):
+### 2. Client Setup
 
 ```typescript
-// chains.ts
-import { defineChain } from "viem";
-
-export const botTestnet = defineChain({
-  id: 968,
-  name: "BOT Testnet",
-  nativeCurrency: { name: "BOT", symbol: "BOT", decimals: 18 },
-  rpcUrls: { default: { http: ["https://rpc.bohr.life"] } },
-  blockExplorers: { default: { name: "BOTScan", url: "https://scan.bohr.life" } },
-});
-
-export const botMainnet = defineChain({
-  id: 677,
-  name: "BOT Chain",
-  nativeCurrency: { name: "BOT", symbol: "BOT", decimals: 18 },
-  rpcUrls: { default: { http: ["https://rpc.botchain.ai"] } },
-  blockExplorers: { default: { name: "BOTScan", url: "https://scan.botchain.ai" } },
-});
-```
-
-Export ABI from Foundry artifacts (`out/BizSwap.sol/BizSwap.json`) or maintain a typed ABI module.
-
-```typescript
-// addresses.ts
-export const BIZSWAP_PROXY = "0x..." as const; // proxy address from deployments/
-export const USDT_ADDRESS = {
-  968: "0x75edC9335175Fc0552D51D48439F229c10420fe3",
-  677: "0xaBabc7Ddc03e501d190C676BF3d92ef0e6e87a3C",
-} as const;
-```
-
-### 2. Loading the contract
-
-```typescript
+// client.ts
 import { createPublicClient, http, getContract } from "viem";
-import { botTestnet } from "./chains";
+import { arcTestnet, arc } from "viem/chains";
 import { bizSwapAbi } from "./abi/BizSwap";
-import { BIZSWAP_PROXY } from "./addresses";
+
+export const BIZSWAP_PROXY = "0x..." as const; // from deployments/
+export const CANONICAL_USDC =
+  "0x3600000000000000000000000000000000000000" as const;
 
 export const publicClient = createPublicClient({
-  chain: botTestnet,
+  chain: arcTestnet, // or `arc` for mainnet
   transport: http(),
 });
 
@@ -309,89 +266,30 @@ export const bizSwap = getContract({
 });
 ```
 
-There are **no PDAs**. Read state via public getters:
-
-- `instruments(uint8 instrumentId)`
-- `certificates(uint256 tokenId)`
-- `ownerOf(tokenId)`, `tokenURI(tokenId)`, `balanceOf(owner)`
-- `quoteFee(instrumentId, netCents)`, `quoteGross(instrumentId, netCents)`
-- `claimable(tokenId)`
-
-### 3. Fetching instrument configuration
+### 3. Reading Certificate & Instrument State
 
 ```typescript
-const instrumentId = 1; // BizCredit
+// Read instrument config
+const instrumentId = 0; // BizYield
 const inst = await bizSwap.read.instruments([instrumentId]);
 
-console.log("Min buy-in (cents):", inst.minBuyInCents.toString());
-console.log("Current supply:", inst.currentSupply.toString());
-console.log(
-  "Remaining cap:",
-  (inst.supplyCap - inst.currentSupply).toString()
-);
-```
-
-### 4. Listing user certificates
-
-ERC-721 ownership is on the token. Prefer indexing `CertificateMinted` / `Transfer` events (BOT public mainnet RPC may limit `eth_getLogs` — use WebSocket, a dedicated RPC, or an indexer).
-
-Minimal approach when you know `tokenId`s (from your backend DB):
-
-```typescript
+// Read certificate details
 const tokenId = 1n;
-const owner = await bizSwap.read.ownerOf([tokenId]);
 const cert = await bizSwap.read.certificates([tokenId]);
-const uri = await bizSwap.read.tokenURI([tokenId]);
+const owner = await bizSwap.read.ownerOf([tokenId]);
+const claimableUsdcRaw = await bizSwap.read.claimable([tokenId]);
 ```
 
-### 5. The ChainRails purchase & minting flow
+### 4. Claiming Distributions
 
-> [!IMPORTANT]
-> **CRITICAL**: The frontend **must not** call `mintCertificate`. That function requires `MINTER_ROLE`, held by a backend hot key only.
-
-1. **User selects instrument** and enters net investment (e.g. $400 BizYield).
-2. **Platform fee (Yield & Bond only)**: show 0.5% **on top** of net:
-   - Investment: $400.00  
-   - Platform fee (0.5%): $2.00  
-   - **Total pay**: $402.00  
-   - BizShares / certificate principal: **$400.00**  
-   - **BizCredit**: fee line is **$0.00**.
-3. **Payment**: ChainRails (or ops) collects gross in the user’s rail; on BOT, settlement accounting is **USDT-denominated**. Off-chain purchase funds go to the revenue wallet — not into `BizSwap` on mint.
-4. **Backend webhook**: confirm payment → call `mintCertificate` with the user’s **EVM address**, instrument id, **net** cents, entitlement BPS, vest/yield timestamps, cycle, metadata URI.
-5. **UI**: poll `ownerOf` / events / backend until the new `tokenId` appears; show dashboard + explorer link to the proxy + token id.
-
-Fee helpers on-chain:
-
-```typescript
-const netCents = 40_000n; // $400.00
-const fee = await bizSwap.read.quoteFee([0, netCents]);   // BizYield → 200
-const gross = await bizSwap.read.quoteGross([0, netCents]); // 40200
-```
-
-### 6. Unlocking vesting (Yield / Bond)
-
-After `vestEnd`, anyone can unlock; typically the holder:
+Certificate owners claim accrued USDC distributions:
 
 ```typescript
 import { createWalletClient, custom } from "viem";
 
-// walletClient from wagmi / browser wallet on BOT chain
-await walletClient.writeContract({
-  address: BIZSWAP_PROXY,
-  abi: bizSwapAbi,
-  functionName: "unlock",
-  args: [tokenId],
-});
-```
-
-### 7. Claiming Phase 2 distributions (USDT)
-
-Holders claim accrued USDT after schedules / yield rounds are funded by `DISTRIBUTOR_ROLE`:
-
-```typescript
 const claimable = await bizSwap.read.claimable([tokenId]);
 if (claimable > 0n) {
-  await walletClient.writeContract({
+  const hash = await walletClient.writeContract({
     address: BIZSWAP_PROXY,
     abi: bizSwapAbi,
     functionName: "claim",
@@ -400,47 +298,42 @@ if (claimable > 0n) {
 }
 ```
 
-Distributor ops (admin tooling, not end-user UI):
+### 5. Distributor Operations
 
-- `depositDistributionUsdt(usdtRaw)` — approve USDT first, funds Credit/Bond pool  
-- `openYieldRound(usdtRaw)` — approve USDT first, opens a BizYield revenue round  
+To fund distributions (admin / distributor backend):
 
-### 8. Indexing note
+```typescript
+// 1. Approve USDC to BizSwap proxy
+await usdcContract.write.approve([BIZSWAP_PROXY, amountUsdcRaw]);
 
-Some BOT mainnet public RPCs disable `eth_getLogs`. For production dashboards, use:
+// 2. Deposit into Credit/Bond pool
+await bizSwap.write.depositDistributionUsdc([amountUsdcRaw]);
 
-- WebSocket subscriptions, or  
-- A dedicated / third-party RPC, or  
-- The Graph / Covalent-style indexer  
-
----
-
-## 7. Public API summary
-
-| Function | Access | Phase |
-|----------|--------|--------|
-| `initialize(...)` | once (proxy init) | 1 |
-| `configureInstrument` | admin | 1 |
-| `configureSchedules` | admin | 2 |
-| `mintCertificate` | minter | 1 |
-| `unlock` | anyone | 1 |
-| `depositDistributionUsdt` | distributor | 2 |
-| `openYieldRound` | distributor | 2 |
-| `claim` | certificate owner | 2 |
-| `claimable` | view | 2 |
-| `quoteFee` / `quoteGross` | view | 1 |
-| `pause` / `unpause` | admin | 1 |
-| `setClaimsPaused` | admin | 2 |
-| `upgradeToAndCall` | admin (UUPS) | ops |
+// OR open a BizYield round
+await bizSwap.write.openYieldRound([amountUsdcRaw]);
+```
 
 ---
 
-## 8. Related docs
+## 6. Public API Summary
 
-- Product roadmap / later versions: [`ROADMAP.md`](./ROADMAP.md)  
-- BOT developer docs: [dev-docs.botchain.ai](https://dev-docs.botchain.ai/)  
-- Solana reference implementation (historical): `../bizswap_solana/`  
+| Function                  | Access      | Purpose                                                       |
+| ------------------------- | ----------- | ------------------------------------------------------------- |
+| `initialize(...)`         | initializer | Initialize proxy with admin, minter, revenue wallet, and USDC |
+| `configureInstrument`     | admin       | Update supply caps and minimum buy-ins                        |
+| `configureSchedules`      | admin       | Update schedule parameters before locking                     |
+| `lockSchedules`           | admin       | Permanently lock financial schedule parameters                |
+| `mintCertificate`         | minter      | Mint RWA certificate NFT after payment verification           |
+| `unlock`                  | anyone      | Unlock certificate after vesting end timestamp                |
+| `depositDistributionUsdc` | distributor | Deposit USDC into Credit/Bond distribution pool               |
+| `openYieldRound`          | distributor | Fund and open a new BizYield revenue round                    |
+| `closeYieldRound`         | distributor | Mark a yield round closed (bookkeeping)                       |
+| `claim`                   | token owner | Claim all matured USDC payouts                                |
+| `claimable`               | view        | Preview claimable USDC for a certificate                      |
+| `quoteFee` / `quoteGross` | view        | Calculate 0.5% fee on net buy-ins                             |
+| `setClaimsPaused`         | admin       | Pause or unpause holder distribution claims                   |
+| `upgradeToAndCall`        | admin       | UUPS implementation contract upgrade                          |
 
 ---
 
-**End of documentation.** Use the **proxy** address as the canonical BizSwap product address on BOT Chain.
+**Canonical BizSwap on Arc**: All interactions and frontend integrations must point to the **ERC1967 Proxy** address on Arc Testnet or Arc Mainnet.
