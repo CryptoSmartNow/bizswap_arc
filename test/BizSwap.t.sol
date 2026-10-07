@@ -100,10 +100,23 @@ contract BizSwapTest is Test {
         assertTrue(biz.hasRole(biz.DEFAULT_ADMIN_ROLE(), admin));
         assertTrue(biz.hasRole(biz.MINTER_ROLE(), minter));
         assertTrue(biz.hasRole(biz.DISTRIBUTOR_ROLE(), admin));
+        assertEq(biz.revenueWallet(), revenue);
         assertEq(biz.usdc(), address(usdcToken));
         assertEq(biz.name(), "BizSwap");
         assertEq(biz.symbol(), "BIZ");
         assertEq(biz.PLATFORM_FEE_BPS(), 50);
+
+        assertTrue(biz.instruments(YIELD).configured);
+        assertEq(biz.instruments(YIELD).supplyCap, 1000);
+        assertEq(biz.instruments(YIELD).minBuyInCents, 1_000);
+
+        assertTrue(biz.instruments(CREDIT).configured);
+        assertEq(biz.instruments(CREDIT).supplyCap, 1000);
+        assertEq(biz.instruments(CREDIT).minBuyInCents, 10_000);
+
+        assertTrue(biz.instruments(BOND).configured);
+        assertEq(biz.instruments(BOND).supplyCap, 1000);
+        assertEq(biz.instruments(BOND).minBuyInCents, 100_000);
     }
 
     function test_Fee_YieldAndBondOnly() public view {

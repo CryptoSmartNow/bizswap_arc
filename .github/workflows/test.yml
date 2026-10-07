@@ -4,17 +4,18 @@ permissions: {}
 
 on:
   push:
+    branches: [main, "feature/**"]
   pull_request:
   workflow_dispatch:
 
 jobs:
-  check:
-    name: Foundry project
+  test-foundry:
+    name: Foundry Quality & Unit Tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
         with:
           persist-credentials: false
           submodules: recursive
@@ -25,11 +26,61 @@ jobs:
       - name: Show Forge version
         run: forge --version
 
-      - name: Run Forge fmt
+      - name: Check Formatting
         run: forge fmt --check
 
-      - name: Run Forge build
+      - name: Build & Check Sizes
         run: forge build --sizes
 
-      - name: Run Forge tests
+      - name: Run Unit Tests
         run: forge test -vvv
+
+  test-arc:
+    name: Arc Foundry Runtime Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Arc Foundry
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          ARC_FOUNDRY_VERSION="v0.8.0-2"
+          ARC_URL="https://github.com/circlefin/arc-foundry/releases/download/${ARC_FOUNDRY_VERSION}/arc-foundry-${ARC_FOUNDRY_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          echo "Downloading Arc Foundry from ${ARC_URL}..."
+          curl -sSL "${ARC_URL}" | tar -xz -C /tmp
+          mv /tmp/forge "$HOME/.local/bin/arc-forge"
+          mv /tmp/cast "$HOME/.local/bin/arc-cast"
+          mv /tmp/anvil "$HOME/.local/bin/arc-anvil"
+          chmod +x "$HOME/.local/bin/arc-"*
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Show Arc Forge version
+        run: arc-forge --version
+
+      - name: Run Tests on Arc Network
+        run: arc-forge test --network arc -vvv
+
+  simulate-deploy:
+    name: Deployment Scripts Simulation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Simulate Arc Testnet Deploy (5042002)
+        run: forge script script/DeployTestnet.s.sol:DeployTestnet --chain-id 5042002
+
+      - name: Simulate Arc Mainnet Deploy (5042)
+        run: CONFIRM_MAINNET=true forge script script/DeployMainnet.s.sol:DeployMainnet --chain-id 5042
