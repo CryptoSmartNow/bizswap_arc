@@ -57,10 +57,15 @@ flowchart TD
 
 #### Global Config (Roles & Pointers)
 
-- **`DEFAULT_ADMIN_ROLE`**: Instrument setup, schedule configuration, pauses, UUPS upgrades, revenue wallet updates.
-- **`MINTER_ROLE`**: Backend hot key for `mintCertificate` only.
-- **`DISTRIBUTOR_ROLE`**: Funds distribution pool (`depositDistributionUsdc`) and opens yield rounds (`openYieldRound`).
-- **`revenueWallet`**: Treasury pointer (off-chain purchase funds settle here in Phase 1).
+Access control is governed by OpenZeppelin's `AccessControlUpgradeable` via 32-byte role identifiers (`bytes32`):
+
+| Role Constant | `bytes32` Hex Identifier | Underlying Value / Calculation | Description & Permissions |
+| :--- | :--- | :--- | :--- |
+| `DEFAULT_ADMIN_ROLE` | `0x0000000000000000000000000000000000000000000000000000000000000000` | `bytes32(0)` | Setup instruments & schedules, pauses, UUPS upgrades, revenue wallet updates |
+| `MINTER_ROLE` | `0x9f2df0fed2c77648de5860a4cc508cd0818c85b8b8a1ab4ceeef8d981c8956a6` | `keccak256("MINTER_ROLE")` | Backend authority for `mintCertificate` only |
+| `DISTRIBUTOR_ROLE` | `0xfbd454f36a7e1a388bd6fc3ab10d434aa4578f811acbbcf33afb1c697486313c` | `keccak256("DISTRIBUTOR_ROLE")` | Funds pool (`depositDistributionUsdc`), opens yield rounds (`openYieldRound`) |
+
+- **`revenueWallet`**: Treasury pointer (`address`) where off-chain purchase funds settle in Phase 1.
 - **`usdc`**: Canonical Arc USDC ERC-20 predeploy (`0x3600000000000000000000000000000000000000`).
 
 #### Arc Stablecoin-Native Model
@@ -204,7 +209,7 @@ cp .env.example .env
 Deploy implementation + proxy, initialize instruments, and configure roles:
 
 ```bash
-#load environmental variables first
+# load environmental variables first
 source .env
 
 # Arc Testnet (5042002)
@@ -217,6 +222,19 @@ forge script script/DeployMainnet.s.sol:DeployMainnet \
 ```
 
 Deployment metadata is saved to `deployments/testnet-5042002.json` or `deployments/mainnet-5042.json`.
+
+### Verification
+
+verify the contract implementation with the following command
+
+```
+arc-forge verify-contract <contract_address> \
+src/BizSwap.sol:BizSwap \
+# CONFIRM CHAIN ID
+--chain-id 5042002 \
+--verifier blockscout \
+--verifier-url https://explorer.testnet.arc.io/api/
+```
 
 ### Smoke Tests
 
@@ -242,17 +260,27 @@ Arc is natively integrated into `viem/chains`. No custom chain definitions are r
 npm install viem wagmi @tanstack/react-query
 ```
 
-### 2. Client Setup
+### 2. Client Setup & Constants
 
 ```typescript
 // client.ts
-import { createPublicClient, http, getContract } from "viem";
+import { createPublicClient, http, getContract, keccak256, toHex, formatUnits } from "viem";
 import { arcTestnet, arc } from "viem/chains";
 import { bizSwapAbi } from "./abi/BizSwap";
 
 export const BIZSWAP_PROXY = "0x..." as const; // from deployments/
 export const CANONICAL_USDC =
   "0x3600000000000000000000000000000000000000" as const;
+
+// Role identifier constants (bytes32 hex format)
+export const ROLES = {
+  DEFAULT_ADMIN_ROLE:
+    "0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`,
+  MINTER_ROLE:
+    "0x9f2df0fed2c77648de5860a4cc508cd0818c85b8b8a1ab4ceeef8d981c8956a6" as `0x${string}`, // keccak256(toHex("MINTER_ROLE"))
+  DISTRIBUTOR_ROLE:
+    "0xfbd454f36a7e1a388bd6fc3ab10d434aa4578f811acbbcf33afb1c697486313c" as `0x${string}`, // keccak256(toHex("DISTRIBUTOR_ROLE"))
+} as const;
 
 export const publicClient = createPublicClient({
   chain: arcTestnet, // or `arc` for mainnet
@@ -266,21 +294,90 @@ export const bizSwap = getContract({
 });
 ```
 
-### 3. Reading Certificate & Instrument State
+### 3. Role Verification & Access Control (`hasRole`)
+
+To check whether a connected account has administrative, minter, or distributor privileges:
 
 ```typescript
-// Read instrument config
-const instrumentId = 0; // BizYield
-const inst = await bizSwap.read.instruments([instrumentId]);
+// Check if an account has a specific role (returns boolean)
+const isAdmin = await bizSwap.read.hasRole([
+  ROLES.DEFAULT_ADMIN_ROLE,
+  userAddress,
+]);
 
-// Read certificate details
-const tokenId = 1n;
-const cert = await bizSwap.read.certificates([tokenId]);
-const owner = await bizSwap.read.ownerOf([tokenId]);
-const claimableUsdcRaw = await bizSwap.read.claimable([tokenId]);
+const isMinter = await bizSwap.read.hasRole([
+  ROLES.MINTER_ROLE,
+  userAddress,
+]);
+
+const isDistributor = await bizSwap.read.hasRole([
+  ROLES.DISTRIBUTOR_ROLE,
+  userAddress,
+]);
+
+// Read treasury pointer
+const revenueWallet = await bizSwap.read.revenueWallet();
 ```
 
-### 4. Claiming Distributions
+> **Note on Role Hashes:** `AccessControl` roles are typed as `bytes32`. When computing roles dynamically in TypeScript, use `keccak256(toHex("ROLE_NAME"))` (or `keccak256(stringToBytes("ROLE_NAME"))`), rather than passing plain strings.
+
+### 4. Reading & Decoding Contract State
+
+#### A. Instrument Configuration (`instruments`)
+`instruments(uint8 id)` returns a tuple of 5 fields:
+- `id`: `0` (BizYield), `1` (BizCredit), `2` (BizBond)
+
+```typescript
+const [supplyCap, currentSupply, minBuyInCents, totalInvestedCents, totalFeesCents] =
+  await bizSwap.read.instruments([0]);
+
+// Units Note: Monetary values in instrument config are USDC CENTS (2 decimals):
+const minBuyInUsd = Number(minBuyInCents) / 100; // e.g. 1000 cents -> $10.00
+const totalInvestedUsd = Number(totalInvestedCents) / 100;
+```
+
+#### B. Certificate Records (`certificates`)
+`certificates(uint256 tokenId)` returns a tuple of 10 fields:
+
+```typescript
+const [
+  instrumentId,      // uint8: 0 = BizYield, 1 = BizCredit, 2 = BizBond
+  amountCents,       // uint64: Net principal in USDC cents (divide by 100 for $)
+  feeCents,          // uint64: Upfront fee in USDC cents (divide by 100 for $)
+  entitlementBps,    // uint16: Yield pool entitlement (100 bps = 1.00%, 10_000 = 100%)
+  purchaseTime,      // uint64: Unix timestamp (seconds)
+  vestEnd,           // uint64: Vesting unlock timestamp (seconds)
+  yieldStart,        // uint64: Yield accrual start timestamp (seconds)
+  status,            // uint8: 0 = Vesting, 1 = Active, 2 = Redeemed
+  serial,            // uint32: Per-instrument issuance number
+  cycle              // uint16: Issuance cycle
+] = await bizSwap.read.certificates([tokenId]);
+
+// Status decoding helper
+export const CertificateStatus = {
+  0: "Vesting",   // Transfers locked until vestEnd; call unlock(tokenId) once vestEnd reached
+  1: "Active",    // Unlocked; eligible for distribution claims
+  2: "Redeemed",  // Fully redeemed
+} as const;
+
+const isVesting = status === 0;
+const isUnlocked = status === 1;
+const entitlementPercentage = Number(entitlementBps) / 100; // e.g. 50 bps -> 0.5%
+```
+
+#### C. Claimable Distribution Balances (`claimable`)
+`claimable(uint256 tokenId)` returns raw 6-decimal USDC claimable by the certificate owner:
+
+```typescript
+import { formatUnits } from "viem";
+
+const claimableUsdcRaw = await bizSwap.read.claimable([tokenId]);
+
+// Format from 6-decimal raw integer to decimal USDC string
+const claimableUsdcFormatted = formatUnits(claimableUsdcRaw, 6); // e.g. 1500000n -> "1.5"
+```
+
+### 5. Claiming Distributions
 
 Certificate owners claim accrued USDC distributions:
 
@@ -298,7 +395,7 @@ if (claimable > 0n) {
 }
 ```
 
-### 5. Distributor Operations
+### 6. Distributor Operations
 
 To fund distributions (admin / distributor backend):
 
@@ -312,6 +409,23 @@ await bizSwap.write.depositDistributionUsdc([amountUsdcRaw]);
 // OR open a BizYield round
 await bizSwap.write.openYieldRound([amountUsdcRaw]);
 ```
+
+### 7. Reading Values via Block Explorer (Blockscout Guide)
+
+When interacting via the **Arc Blockscout Explorer** ([explorer.testnet.arc.io](https://explorer.testnet.arc.io) or [explorer.arc.io](https://explorer.arc.io)):
+
+1. Open the **BizSwap Proxy** contract page (always use **Read as Proxy** or **Write as Proxy**).
+2. For role checks under **`hasRole`**:
+   - **Do NOT enter plain text strings** like `DEFAULT_ADMIN_ROLE` or `MINTER_ROLE`. Blockscout expects a raw 32-byte hex string and will display an **`Invalid bytes format`** error.
+   - **Enter the 32-byte hex string** starting with `0x`:
+
+| Field in Explorer | For Admin Check | For Minter Check | For Distributor Check |
+| :--- | :--- | :--- | :--- |
+| **`role (bytes32)*`** | `0x0000000000000000000000000000000000000000000000000000000000000000` | `0x9f2df0fed2c77648de5860a4cc508cd0818c85b8b8a1ab4ceeef8d981c8956a6` | `0xfbd454f36a7e1a388bd6fc3ab10d434aa4578f811acbbcf33afb1c697486313c` |
+| **`account (address)*`** | Account address (`0x...`) | Account address (`0x...`) | Account address (`0x...`) |
+
+3. For **`instruments`**: Enter `0` for BizYield, `1` for BizCredit, or `2` for BizBond.
+4. For **`certificates`** / **`claimable`**: Enter the numeric `tokenId` (e.g. `1`).
 
 ---
 
