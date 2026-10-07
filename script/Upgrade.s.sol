@@ -5,7 +5,7 @@ import {Script, console2} from "forge-std/Script.sol";
 
 import {BizSwap} from "../src/BizSwap.sol";
 
-/// @notice Upgrade BizSwap proxy to a new implementation.
+/// @notice Upgrade BizSwap proxy to a new implementation on Arc Network.
 contract Upgrade is Script {
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");

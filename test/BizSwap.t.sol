@@ -7,7 +7,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {BizSwap} from "../src/BizSwap.sol";
 import {IBizSwap} from "../src/interfaces/IBizSwap.sol";
-import {MockUSDT} from "../src/mocks/MockUSDT.sol";
+import {MockUSDC} from "../src/mocks/MockUSDC.sol";
 import {AmountCodec} from "../src/libraries/AmountCodec.sol";
 
 contract BizSwapV2 is BizSwap {
@@ -18,7 +18,7 @@ contract BizSwapV2 is BizSwap {
 
 contract BizSwapTest is Test {
     BizSwap internal biz;
-    MockUSDT internal usdtToken;
+    MockUSDC internal usdcToken;
 
     address internal admin = makeAddr("admin");
     address internal minter = makeAddr("minter");
@@ -34,8 +34,8 @@ contract BizSwapTest is Test {
     uint64 internal constant YIELD_START = 1_900_000_000;
 
     function setUp() public {
-        usdtToken = new MockUSDT();
-        biz = _deploy(admin, minter, revenue, address(usdtToken));
+        usdcToken = new MockUSDC();
+        biz = _deploy(admin, minter, revenue, address(usdcToken));
 
         vm.startPrank(admin);
         biz.configureInstrument(YIELD, 1000, 1_000);
@@ -54,12 +54,12 @@ contract BizSwapTest is Test {
         vm.stopPrank();
     }
 
-    function _deploy(address admin_, address minter_, address revenue_, address usdt_)
+    function _deploy(address admin_, address minter_, address revenue_, address usdc_)
         internal
         returns (BizSwap proxyAs)
     {
         BizSwap impl = new BizSwap();
-        bytes memory initData = abi.encodeCall(BizSwap.initialize, (admin_, minter_, revenue_, usdt_, "BizSwap", "BIZ"));
+        bytes memory initData = abi.encodeCall(BizSwap.initialize, (admin_, minter_, revenue_, usdc_, "BizSwap", "BIZ"));
         ERC1967Proxy proxy = new ERC1967Proxy(address(impl), initData);
         proxyAs = BizSwap(address(proxy));
     }
@@ -78,19 +78,19 @@ contract BizSwapTest is Test {
         );
     }
 
-    function _fundPool(uint256 usdtRaw) internal {
-        usdtToken.mint(admin, usdtRaw);
+    function _fundPool(uint256 usdcRaw) internal {
+        usdcToken.mint(admin, usdcRaw);
         vm.startPrank(admin);
-        usdtToken.approve(address(biz), usdtRaw);
-        biz.depositDistributionUsdt(usdtRaw);
+        usdcToken.approve(address(biz), usdcRaw);
+        biz.depositDistributionUsdc(usdcRaw);
         vm.stopPrank();
     }
 
-    function _fundYieldRound(uint256 usdtRaw) internal returns (uint256 roundId) {
-        usdtToken.mint(admin, usdtRaw);
+    function _fundYieldRound(uint256 usdcRaw) internal returns (uint256 roundId) {
+        usdcToken.mint(admin, usdcRaw);
         vm.startPrank(admin);
-        usdtToken.approve(address(biz), usdtRaw);
-        roundId = biz.openYieldRound(usdtRaw);
+        usdcToken.approve(address(biz), usdcRaw);
+        roundId = biz.openYieldRound(usdcRaw);
         vm.stopPrank();
     }
 
@@ -100,7 +100,7 @@ contract BizSwapTest is Test {
         assertTrue(biz.hasRole(biz.DEFAULT_ADMIN_ROLE(), admin));
         assertTrue(biz.hasRole(biz.MINTER_ROLE(), minter));
         assertTrue(biz.hasRole(biz.DISTRIBUTOR_ROLE(), admin));
-        assertEq(biz.usdt(), address(usdtToken));
+        assertEq(biz.usdc(), address(usdcToken));
         assertEq(biz.name(), "BizSwap");
         assertEq(biz.symbol(), "BIZ");
         assertEq(biz.PLATFORM_FEE_BPS(), 50);
@@ -166,7 +166,7 @@ contract BizSwapTest is Test {
     // ─── Phase 2 Yield ───────────────────────────────────────────────────────
 
     function test_YieldClaim_ShareOfRound() public {
-        // 5% entitlement (500 bps), round $1000 USDT = 1000e6 raw
+        // 5% entitlement (500 bps), round $1000 USDC = 1000e6 raw
         uint256 tokenId = _mint(user, YIELD, 50_000, 500, VEST_END, YIELD_START);
         vm.warp(VEST_END);
         biz.unlock(tokenId);
@@ -175,14 +175,14 @@ contract BizSwapTest is Test {
         uint256 roundRaw = 1_000 * 1e6;
         _fundYieldRound(roundRaw);
 
-        uint256 expected = (roundRaw * 500) / 10_000; // 50 USDT
+        uint256 expected = (roundRaw * 500) / 10_000; // 50 USDC
         assertEq(biz.claimable(tokenId), expected);
 
-        uint256 balBefore = usdtToken.balanceOf(user);
+        uint256 balBefore = usdcToken.balanceOf(user);
         vm.prank(user);
         uint256 paid = biz.claim(tokenId);
         assertEq(paid, expected);
-        assertEq(usdtToken.balanceOf(user) - balBefore, expected);
+        assertEq(usdcToken.balanceOf(user) - balBefore, expected);
 
         // second claim empty
         vm.prank(user);
@@ -240,7 +240,7 @@ contract BizSwapTest is Test {
         assertEq(biz.claim(tokenId), remaining);
 
         assertEq(uint8(biz.certificates(tokenId).status), uint8(IBizSwap.Status.Redeemed));
-        assertEq(usdtToken.balanceOf(user), totalRaw);
+        assertEq(usdcToken.balanceOf(user), totalRaw);
     }
 
     function test_Credit_InsufficientPool() public {
@@ -305,11 +305,11 @@ contract BizSwapTest is Test {
     }
 
     function test_NonDistributorCannotDeposit() public {
-        usdtToken.mint(user, 1e6);
+        usdcToken.mint(user, 1e6);
         vm.startPrank(user);
-        usdtToken.approve(address(biz), 1e6);
+        usdcToken.approve(address(biz), 1e6);
         vm.expectRevert();
-        biz.depositDistributionUsdt(1e6);
+        biz.depositDistributionUsdc(1e6);
         vm.stopPrank();
     }
 
@@ -325,23 +325,18 @@ contract BizSwapTest is Test {
         assertEq(BizSwapV2(address(biz)).version(), "v2");
     }
 
-    // ─── Security Fix 2: entitlementBps bounds ──────────────────────────────
+    // ─── Security Bounds & Invariants ────────────────────────────────────────
 
     function test_Mint_EntitlementTooHigh_Reverts() public {
-        // entitlementBps = 10_001 (> BPS_DENOMINATOR) must revert
         vm.prank(minter);
         vm.expectRevert(IBizSwap.EntitlementTooHigh.selector);
         biz.mintCertificate(user, YIELD, 1_000, 10_001, VEST_END, YIELD_START, bytes32("2026-MAY"), "ipfs://x");
 
-        // entitlementBps = 10_000 (exactly 100%) should succeed
         vm.prank(minter);
         biz.mintCertificate(user, YIELD, 1_000, 10_000, VEST_END, YIELD_START, bytes32("2026-MAY"), "ipfs://x");
     }
 
-    // ─── Security Fix 1: yield round solvency guard ─────────────────────────
-
     function test_YieldClaim_SolvencyGuard_SkipsOverallocated() public {
-        // Mint two certificates each claiming 60% (6000 bps) = 120% total
         uint256 t1 = _mint(user, YIELD, 1_000, 6_000, VEST_END, YIELD_START);
         uint256 t2 = _mint(other, YIELD, 1_000, 6_000, VEST_END, YIELD_START);
         vm.warp(VEST_END);
@@ -352,20 +347,15 @@ contract BizSwapTest is Test {
         uint256 roundRaw = 100e6; // $100
         _fundYieldRound(roundRaw);
 
-        // User 1 claims 60% = $60
         uint256 expected1 = (roundRaw * 6_000) / 10_000;
         vm.prank(user);
         uint256 paid1 = biz.claim(t1);
         assertEq(paid1, expected1);
 
-        // User 2 tries to claim 60% but only 40% remains in round
-        // Solvency guard should skip the over-allocated round, resulting in NothingToClaim
         vm.prank(other);
         vm.expectRevert(IBizSwap.NothingToClaim.selector);
         biz.claim(t2);
     }
-
-    // ─── Security Fix 4: closeYieldRound bookkeeping ────────────────────────
 
     function test_CloseYieldRound_BookkeepingOnly() public {
         uint256 tokenId = _mint(user, YIELD, 50_000, 500, VEST_END, YIELD_START);
@@ -376,15 +366,12 @@ contract BizSwapTest is Test {
         uint256 roundRaw = 1_000e6;
         uint256 roundId = _fundYieldRound(roundRaw);
 
-        // Close the round — should succeed
         vm.prank(admin);
         biz.closeYieldRound(roundId);
 
-        // Verify round is marked closed
         IBizSwap.YieldRound memory round = biz.yieldRounds(roundId);
         assertTrue(round.closed);
 
-        // Holder can STILL claim from a closed round (investor funds stay accessible)
         uint256 expected = (roundRaw * 500) / 10_000;
         assertEq(biz.claimable(tokenId), expected);
         vm.prank(user);
@@ -398,21 +385,16 @@ contract BizSwapTest is Test {
         vm.prank(admin);
         biz.closeYieldRound(roundId);
 
-        // Second close should revert
         vm.prank(admin);
         vm.expectRevert(IBizSwap.RoundAlreadyClosed.selector);
         biz.closeYieldRound(roundId);
     }
 
-    // ─── Security Fix 5: schedule lock ──────────────────────────────────────
-
     function test_LockSchedules_PreventsChange() public {
-        // Lock schedules
         vm.prank(admin);
         biz.lockSchedules();
         assertTrue(biz.schedulesLocked());
 
-        // Attempt to change schedules should revert
         vm.prank(admin);
         vm.expectRevert(IBizSwap.SchedulesAreLocked.selector);
         biz.configureSchedules({
@@ -426,8 +408,6 @@ contract BizSwapTest is Test {
         });
     }
 
-    // ─── Security Fix 6: claims paused event ────────────────────────────────
-
     function test_ClaimsPaused_EmitsEvent() public {
         vm.prank(admin);
         vm.expectEmit(false, false, false, true, address(biz));
@@ -440,16 +420,12 @@ contract BizSwapTest is Test {
         biz.setClaimsPaused(false);
     }
 
-    // ─── Security Fix 3: bounded yield loop cursor ──────────────────────────
-
     function test_YieldClaim_MultipleRounds_Optimized() public {
-        // Mint a yield certificate with 10% entitlement
         uint256 tokenId = _mint(user, YIELD, 1_000, 1_000, VEST_END, YIELD_START);
         vm.warp(VEST_END);
         biz.unlock(tokenId);
         vm.warp(YIELD_START);
 
-        // Open 3 rounds
         uint256 roundRaw = 100e6; // $100 each
         _fundYieldRound(roundRaw);
         _fundYieldRound(roundRaw);
@@ -457,22 +433,34 @@ contract BizSwapTest is Test {
 
         uint256 perRound = (roundRaw * 1_000) / 10_000; // $10 per round
 
-        // Claim round 1 + 2 + 3
         vm.prank(user);
         uint256 paid = biz.claim(tokenId);
         assertEq(paid, perRound * 3);
 
-        // Open round 4
         _fundYieldRound(roundRaw);
 
-        // Claim round 4 only (cursor should skip past 1-3)
         vm.prank(user);
         uint256 paid2 = biz.claim(tokenId);
         assertEq(paid2, perRound);
 
-        // Nothing left to claim
         vm.prank(user);
         vm.expectRevert(IBizSwap.NothingToClaim.selector);
         biz.claim(tokenId);
+    }
+
+    // ─── Arc-Specific EVM Checks ─────────────────────────────────────────────
+
+    function test_Arc_RevertIf_NativeValueSent() public {
+        vm.deal(user, 1 ether);
+        vm.prank(user);
+        (bool ok,) = address(biz).call{value: 1}("");
+        assertFalse(ok, "Direct native value transfer must revert on Arc");
+    }
+
+    function test_Arc_CanonicalPredeployAddressConfig() public {
+        address canonicalUSDC = 0x3600000000000000000000000000000000000000;
+        BizSwap arcBiz = _deploy(admin, minter, revenue, canonicalUSDC);
+        assertEq(arcBiz.usdc(), canonicalUSDC);
+        assertEq(arcBiz.usdcDecimals(), 6);
     }
 }

@@ -6,26 +6,26 @@ import {Script, console2} from "forge-std/Script.sol";
 import {BizSwap} from "../src/BizSwap.sol";
 import {IBizSwap} from "../src/interfaces/IBizSwap.sol";
 
-/// @notice Smoke checks against a deployed BizSwap testnet proxy.
+/// @notice Smoke checks against a deployed BizSwap Arc Testnet proxy.
 contract SmokeTestnet is Script {
-    uint256 internal constant CHAIN_ID = 968;
-    address internal constant EXPECTED_USDT = 0x75edC9335175Fc0552D51D48439F229c10420fe3;
+    uint256 internal constant CHAIN_ID = 5042002;
+    address internal constant EXPECTED_USDC = 0x3600000000000000000000000000000000000000;
 
     function run() external view {
-        require(block.chainid == CHAIN_ID, "SmokeTestnet: wrong chainId");
+        require(block.chainid == CHAIN_ID, "SmokeTestnet: wrong chainId (expected 5042002 for Arc Testnet)");
 
         address proxyAddr = vm.envAddress("PROXY_ADDRESS");
         BizSwap biz = BizSwap(proxyAddr);
 
         console2.log("Proxy:        ", proxyAddr);
         console2.log("Name:         ", biz.name());
-        console2.log("USDT:         ", biz.usdt());
+        console2.log("USDC:         ", biz.usdc());
         console2.log("Revenue:      ", biz.revenueWallet());
         console2.log("Fee bps:      ", biz.PLATFORM_FEE_BPS());
         console2.log("Next tokenId: ", biz.nextTokenId());
-        console2.log("Pool USDT:    ", biz.distributionPoolUsdtRaw());
+        console2.log("Pool USDC:    ", biz.distributionPoolUsdcRaw());
 
-        require(biz.usdt() == EXPECTED_USDT, "unexpected USDT");
+        require(biz.usdc() == EXPECTED_USDC, "unexpected USDC address");
         require(biz.PLATFORM_FEE_BPS() == 50, "unexpected fee bps");
 
         for (uint8 i = 0; i < 3; i++) {

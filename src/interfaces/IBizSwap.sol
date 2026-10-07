@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 /// @title IBizSwap
-/// @notice BizSwap RWA instruments on BOT Chain — Phase 1 registry + Phase 2 USDT distributions.
+/// @notice BizSwap RWA instruments on Arc Network — Phase 1 registry + Phase 2 USDC distributions.
 interface IBizSwap {
     enum Status {
         Vesting,
@@ -33,8 +33,8 @@ interface IBizSwap {
     }
 
     struct YieldRound {
-        uint256 totalUsdtRaw;
-        uint256 claimedUsdtRaw;
+        uint256 totalUsdcRaw;
+        uint256 claimedUsdcRaw;
         uint64 openedAt;
         bool closed;
     }
@@ -68,9 +68,9 @@ interface IBizSwap {
         uint256 bondQuarterBps
     );
 
-    event DistributionDeposited(address indexed from, uint256 usdtRaw, uint256 poolBalance);
+    event DistributionDeposited(address indexed from, uint256 usdcRaw, uint256 poolBalance);
 
-    event YieldRoundOpened(uint256 indexed roundId, uint256 usdtRaw, uint64 openedAt);
+    event YieldRoundOpened(uint256 indexed roundId, uint256 usdcRaw, uint64 openedAt);
 
     event YieldRoundClosed(uint256 indexed roundId);
 
@@ -78,7 +78,7 @@ interface IBizSwap {
 
     event ClaimsPausedChanged(bool paused);
 
-    event Claimed(address indexed to, uint256 indexed tokenId, uint8 instrumentId, uint256 usdtRaw);
+    event Claimed(address indexed to, uint256 indexed tokenId, uint8 instrumentId, uint256 usdcRaw);
 
     error ZeroAddress();
     error InvalidInstrument();
@@ -113,7 +113,7 @@ interface IBizSwap {
 
     function revenueWallet() external view returns (address);
 
-    function usdt() external view returns (address);
+    function usdc() external view returns (address);
 
     function nextTokenId() external view returns (uint256);
 
@@ -148,15 +148,15 @@ interface IBizSwap {
 
     function setClaimsPaused(bool paused) external;
 
-    function depositDistributionUsdt(uint256 usdtRaw) external;
+    function depositDistributionUsdc(uint256 usdcRaw) external;
 
-    function openYieldRound(uint256 usdtRaw) external returns (uint256 roundId);
+    function openYieldRound(uint256 usdcRaw) external returns (uint256 roundId);
 
     function closeYieldRound(uint256 roundId) external;
 
     function lockSchedules() external;
 
-    function claim(uint256 tokenId) external returns (uint256 usdtRawPaid);
+    function claim(uint256 tokenId) external returns (uint256 usdcRawPaid);
 
-    function claimable(uint256 tokenId) external view returns (uint256 usdtRaw);
+    function claimable(uint256 tokenId) external view returns (uint256 usdcRaw);
 }
