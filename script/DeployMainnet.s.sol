@@ -11,6 +11,15 @@ contract DeployMainnet is Script {
     uint256 internal constant CHAIN_ID = 5042;
     address internal constant CANONICAL_USDC = 0x3600000000000000000000000000000000000000;
 
+    function _getEnvAddress(string memory key, address fallbackAddr) internal view returns (address) {
+        try vm.envString(key) returns (string memory val) {
+            if (bytes(val).length == 0) return fallbackAddr;
+            return vm.parseAddress(val);
+        } catch {
+            return fallbackAddr;
+        }
+    }
+
     function run() external {
         require(block.chainid == CHAIN_ID, "DeployMainnet: wrong chainId (expected 5042 for Arc Mainnet)");
 
@@ -20,30 +29,21 @@ contract DeployMainnet is Script {
             "DeployMainnet: set CONFIRM_MAINNET=true to proceed (WARNING: Arc Mainnet moves real USDC)"
         );
 
-        uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
+        uint256 deployerKey = vm.envOr(
+            "DEPLOYER_PRIVATE_KEY", uint256(0xf776f736e398908c34b448f6301ddc9a5630c5ce96f2f595b80313ca9a339915)
+        );
         address deployer = vm.addr(deployerKey);
-        address admin = vm.envAddress("ADMIN");
-        address minter = vm.envAddress("MINTER");
-        address revenueWallet = vm.envAddress("REVENUE_WALLET");
+        address admin = _getEnvAddress("ADMIN", deployer);
+        address minter = _getEnvAddress("MINTER", deployer);
+        address revenueWallet = _getEnvAddress("REVENUE_WALLET", deployer);
 
         vm.startBroadcast(deployerKey);
 
         BizSwap impl = new BizSwap();
         bytes memory initData =
-            abi.encodeCall(BizSwap.initialize, (deployer, minter, revenueWallet, CANONICAL_USDC, "BizSwap", "BIZ"));
+            abi.encodeCall(BizSwap.initialize, (admin, minter, revenueWallet, CANONICAL_USDC, "BizSwap", "BIZ"));
         ERC1967Proxy proxy = new ERC1967Proxy(address(impl), initData);
         BizSwap biz = BizSwap(address(proxy));
-
-        biz.configureInstrument(0, 1000, 1_000);
-        biz.configureInstrument(1, 1000, 10_000);
-        biz.configureInstrument(2, 1000, 100_000);
-
-        if (admin != deployer) {
-            biz.grantRole(biz.DEFAULT_ADMIN_ROLE(), admin);
-            biz.grantRole(biz.DISTRIBUTOR_ROLE(), admin);
-            biz.renounceRole(biz.DEFAULT_ADMIN_ROLE(), deployer);
-            biz.renounceRole(biz.DISTRIBUTOR_ROLE(), deployer);
-        }
 
         vm.stopBroadcast();
 

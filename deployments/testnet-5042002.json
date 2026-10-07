@@ -2,8 +2,8 @@
   "chainId": 5042002,
   "network": "Arc Testnet",
   "contract": "BizSwap",
-  "proxy": "0xA194cf2bA6ad02158338E577C0330f0E43aA6677",
-  "implementation": "0x8cdC97a2Feb2d3Ea39a111B1752cade04Bee4160",
+  "proxy": "0x90f63f0bD7d28194AE6a2eBDCEDF74aF79D9534B",
+  "implementation": "0xffDd941d4e8eB23C14c4476d5722aA51DcA91C5a",
   "usdc": "0x3600000000000000000000000000000000000000",
   "admin": "0x038a4e7c11193eBdF6FE574bD9eCf6989c8bEafe",
   "minter": "0x72578e136E72A18A832be6762230a820f514d180",
@@ -13,6 +13,6 @@
     "phase1-registry",
     "phase2-distributions"
   ],
-  "deployedAt": 1791392806,
-  "txHash": ""
+  "deployedAt": 1791412707,
+  "txHash": "0x0b685e299c9498af62088c035031fee962ea82d53a77a5a64cf5fe54d58914c9"
 }

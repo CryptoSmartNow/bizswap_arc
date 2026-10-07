@@ -120,6 +120,37 @@ contract BizSwap is
         bondQuarterSeconds = 90 days;
         bondMaxQuarters = 8;
         bondQuarterBps = 250; // 2.5% of principal per quarter
+
+        // Default instruments setup
+        _instruments[INSTRUMENT_BIZ_YIELD] = Instrument({
+            configured: true,
+            supplyCap: 1000,
+            currentSupply: 0,
+            minBuyInCents: 1_000,
+            totalInvestedCents: 0,
+            totalFeesCents: 0
+        });
+        emit InstrumentConfigured(INSTRUMENT_BIZ_YIELD, 1000, 1_000);
+
+        _instruments[INSTRUMENT_BIZ_CREDIT] = Instrument({
+            configured: true,
+            supplyCap: 1000,
+            currentSupply: 0,
+            minBuyInCents: 10_000,
+            totalInvestedCents: 0,
+            totalFeesCents: 0
+        });
+        emit InstrumentConfigured(INSTRUMENT_BIZ_CREDIT, 1000, 10_000);
+
+        _instruments[INSTRUMENT_BIZ_BOND] = Instrument({
+            configured: true,
+            supplyCap: 1000,
+            currentSupply: 0,
+            minBuyInCents: 100_000,
+            totalInvestedCents: 0,
+            totalFeesCents: 0
+        });
+        emit InstrumentConfigured(INSTRUMENT_BIZ_BOND, 1000, 100_000);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
