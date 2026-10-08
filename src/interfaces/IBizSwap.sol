@@ -68,7 +68,7 @@ interface IBizSwap {
         uint256 bondQuarterBps
     );
 
-    event DistributionDeposited(address indexed from, uint256 usdcRaw, uint256 poolBalance);
+    event DistributionDeposited(address indexed from, uint8 indexed instrumentId, uint256 usdcRaw, uint256 poolBalance);
 
     event YieldRoundOpened(uint256 indexed roundId, uint256 usdcRaw, uint64 openedAt);
 
@@ -102,10 +102,13 @@ interface IBizSwap {
     error EntitlementTooHigh();
     error RoundAlreadyClosed();
     error SchedulesAreLocked();
+    error MaxYieldRoundsReached();
 
     function PLATFORM_FEE_BPS() external view returns (uint16);
 
     function BPS_DENOMINATOR() external view returns (uint16);
+
+    function MAX_YIELD_ROUNDS() external view returns (uint256);
 
     function MINTER_ROLE() external view returns (bytes32);
 
@@ -116,6 +119,14 @@ interface IBizSwap {
     function usdc() external view returns (address);
 
     function nextTokenId() external view returns (uint256);
+
+    function distributionPoolUsdcRaw() external view returns (uint256);
+
+    function creditPoolUsdcRaw() external view returns (uint256);
+
+    function bondPoolUsdcRaw() external view returns (uint256);
+
+    function totalYieldEntitlementBps() external view returns (uint256);
 
     function instruments(uint8 instrumentId) external view returns (Instrument memory);
 
@@ -148,7 +159,7 @@ interface IBizSwap {
 
     function setClaimsPaused(bool paused) external;
 
-    function depositDistributionUsdc(uint256 usdcRaw) external;
+    function depositDistributionUsdc(uint8 instrumentId, uint256 usdcRaw) external;
 
     function openYieldRound(uint256 usdcRaw) external returns (uint256 roundId);
 
@@ -158,5 +169,9 @@ interface IBizSwap {
 
     function claim(uint256 tokenId) external returns (uint256 usdcRawPaid);
 
+    function claim(uint256 tokenId, uint256 maxRoundsToProcess) external returns (uint256 usdcRawPaid);
+
     function claimable(uint256 tokenId) external view returns (uint256 usdcRaw);
+
+    function claimable(uint256 tokenId, uint256 maxRoundsToProcess) external view returns (uint256 usdcRaw);
 }

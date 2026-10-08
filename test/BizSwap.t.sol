@@ -79,10 +79,11 @@ contract BizSwapTest is Test {
     }
 
     function _fundPool(uint256 usdcRaw) internal {
-        usdcToken.mint(admin, usdcRaw);
+        usdcToken.mint(admin, usdcRaw * 2);
         vm.startPrank(admin);
-        usdcToken.approve(address(biz), usdcRaw);
-        biz.depositDistributionUsdc(usdcRaw);
+        usdcToken.approve(address(biz), usdcRaw * 2);
+        biz.depositDistributionUsdc(CREDIT, usdcRaw);
+        biz.depositDistributionUsdc(BOND, usdcRaw);
         vm.stopPrank();
     }
 
@@ -322,7 +323,7 @@ contract BizSwapTest is Test {
         vm.startPrank(user);
         usdcToken.approve(address(biz), 1e6);
         vm.expectRevert();
-        biz.depositDistributionUsdc(1e6);
+        biz.depositDistributionUsdc(CREDIT, 1e6);
         vm.stopPrank();
     }
 
@@ -349,25 +350,187 @@ contract BizSwapTest is Test {
         biz.mintCertificate(user, YIELD, 1_000, 10_000, VEST_END, YIELD_START, bytes32("2026-MAY"), "ipfs://x");
     }
 
-    function test_YieldClaim_SolvencyGuard_SkipsOverallocated() public {
-        uint256 t1 = _mint(user, YIELD, 1_000, 6_000, VEST_END, YIELD_START);
-        uint256 t2 = _mint(other, YIELD, 1_000, 6_000, VEST_END, YIELD_START);
+    function test_YieldMint_RevertIf_AggregateEntitlementExceeds100Percent() public {
+        _mint(user, YIELD, 1_000, 6_000, VEST_END, YIELD_START);
+        assertEq(biz.totalYieldEntitlementBps(), 6_000);
+
+        vm.prank(minter);
+        vm.expectRevert(IBizSwap.EntitlementTooHigh.selector);
+        biz.mintCertificate(other, YIELD, 1_000, 4_001, VEST_END, YIELD_START, bytes32("2026-MAY"), "ipfs://x");
+
+        _mint(other, YIELD, 1_000, 4_000, VEST_END, YIELD_START);
+        assertEq(biz.totalYieldEntitlementBps(), 10_000);
+
+        vm.prank(minter);
+        vm.expectRevert(IBizSwap.EntitlementTooHigh.selector);
+        biz.mintCertificate(other, YIELD, 1_000, 1, VEST_END, YIELD_START, bytes32("2026-MAY"), "ipfs://x");
+    }
+
+    function test_Gap3_YieldRoundCap24() public {
+        assertEq(biz.MAX_YIELD_ROUNDS(), 24);
+
+        for (uint256 i = 0; i < 24; i++) {
+            _fundYieldRound(10e6);
+        }
+        assertEq(biz.nextYieldRoundId(), 25);
+
+        usdcToken.mint(admin, 10e6);
+        vm.startPrank(admin);
+        usdcToken.approve(address(biz), 10e6);
+        vm.expectRevert(IBizSwap.MaxYieldRoundsReached.selector);
+        biz.openYieldRound(10e6);
+        vm.stopPrank();
+    }
+
+    function test_Gap3_YieldBatchClaim_Pagination() public {
+        uint256 tokenId = _mint(user, YIELD, 1_000, 1_000, VEST_END, YIELD_START);
         vm.warp(VEST_END);
-        biz.unlock(t1);
-        biz.unlock(t2);
+        biz.unlock(tokenId);
         vm.warp(YIELD_START);
 
-        uint256 roundRaw = 100e6; // $100
-        _fundYieldRound(roundRaw);
+        for (uint256 i = 0; i < 10; i++) {
+            _fundYieldRound(100e6);
+        }
 
-        uint256 expected1 = (roundRaw * 6_000) / 10_000;
         vm.prank(user);
-        uint256 paid1 = biz.claim(t1);
-        assertEq(paid1, expected1);
+        uint256 paid1 = biz.claim(tokenId, 4);
+        assertEq(paid1, 40e6);
+
+        uint256 claimableNext4 = biz.claimable(tokenId, 4);
+        assertEq(claimableNext4, 40e6);
+
+        uint256 claimableRemaining = biz.claimable(tokenId, 0);
+        assertEq(claimableRemaining, 60e6);
+
+        vm.prank(user);
+        uint256 paid2 = biz.claim(tokenId, 10);
+        assertEq(paid2, 60e6);
+
+        vm.prank(user);
+        vm.expectRevert(IBizSwap.NothingToClaim.selector);
+        biz.claim(tokenId);
+    }
+
+    function test_Gap4_IsolatedCreditAndBondPools() public {
+        usdcToken.mint(admin, 2_000e6);
+        vm.startPrank(admin);
+        usdcToken.approve(address(biz), 2_000e6);
+
+        biz.depositDistributionUsdc(CREDIT, 1_200e6);
+        biz.depositDistributionUsdc(BOND, 800e6);
+
+        assertEq(biz.creditPoolUsdcRaw(), 1_200e6);
+        assertEq(biz.bondPoolUsdcRaw(), 800e6);
+        assertEq(biz.distributionPoolUsdcRaw(), 2_000e6);
+
+        vm.expectRevert(IBizSwap.InvalidInstrument.selector);
+        biz.depositDistributionUsdc(YIELD, 100e6);
+        vm.stopPrank();
+
+        uint256 creditId = _mint(user, CREDIT, 10_000, 0, 0, 0);
+        uint256 bondId = _mint(other, BOND, 100_000, 0, 1_000_000, 1_000_000);
+
+        vm.warp(1_000_000);
+        biz.unlock(bondId);
+        uint256 creditClaimable = biz.claimable(creditId);
+        assertTrue(creditClaimable > 0);
+
+        vm.prank(user);
+        uint256 paidCredit = biz.claim(creditId);
+        assertEq(paidCredit, creditClaimable);
+        assertEq(biz.creditPoolUsdcRaw(), 1_200e6 - paidCredit);
+        assertEq(biz.bondPoolUsdcRaw(), 800e6);
+
+        vm.warp(1_000_000 + 90 days);
+        uint256 bondClaimable = biz.claimable(bondId);
+        assertTrue(bondClaimable > 0);
 
         vm.prank(other);
-        vm.expectRevert(IBizSwap.NothingToClaim.selector);
-        biz.claim(t2);
+        uint256 paidBond = biz.claim(bondId);
+        assertEq(paidBond, bondClaimable);
+        assertEq(biz.bondPoolUsdcRaw(), 800e6 - paidBond);
+    }
+
+    function test_Gap5_AutoUnlockOnTransfer() public {
+        uint64 vestEnd = uint64(block.timestamp + 30 days);
+        uint256 tokenId = _mint(user, YIELD, 1_000, 500, vestEnd, vestEnd);
+
+        IBizSwap.Certificate memory cert = biz.certificates(tokenId);
+        assertEq(uint8(cert.status), uint8(IBizSwap.Status.Vesting));
+
+        vm.prank(user);
+        vm.expectRevert(IBizSwap.TransferWhileVesting.selector);
+        biz.transferFrom(user, other, tokenId);
+
+        vm.warp(vestEnd + 1);
+
+        vm.prank(user);
+        biz.transferFrom(user, other, tokenId);
+
+        assertEq(biz.ownerOf(tokenId), other);
+        cert = biz.certificates(tokenId);
+        assertEq(uint8(cert.status), uint8(IBizSwap.Status.Active));
+    }
+
+    function test_Gap6_CreditRemainderCentsDelivered() public {
+        // Principal = 10,001 cents ($100.01)
+        // Total return bps = 10,404 -> total return = (10,001 * 10,404) / 10,000 = 10,405 cents
+        // 10,405 / 12 = 867 cents per week
+        // 10,405 % 12 = 1 cent remainder
+        // Weekly raw: 867 cents = 8.67 USDC = 8_670_000 raw units
+        // Week 12: 867 + 1 = 868 cents = 8.68 USDC = 8_680_000 raw units
+        // Total expected = 10,405 cents = 104.05 USDC = 104_050_000 raw units
+        uint256 principalCents = 10_001;
+        uint256 tokenId = _mint(user, CREDIT, principalCents, 0, 0, 0);
+
+        _fundPool(200e6);
+
+        vm.warp(1_000_000); // creditFirstPayment
+
+        uint256 totalPaid = 0;
+        for (uint256 week = 0; week < 12; week++) {
+            if (week > 0) {
+                vm.warp(1_000_000 + week * 7 days);
+            }
+            vm.prank(user);
+            uint256 paid = biz.claim(tokenId);
+            totalPaid += paid;
+            if (week < 11) {
+                assertEq(paid, 8_670_000);
+            } else {
+                // Final week (week 12) receives weekly payout plus the 1 cent remainder
+                assertEq(paid, 8_680_000);
+            }
+        }
+
+        uint256 expectedTotalCents = (principalCents * 10_404) / 10_000;
+        uint256 expectedTotalRaw = AmountCodec.centsToRaw(expectedTotalCents, 6);
+        assertEq(totalPaid, expectedTotalRaw);
+        assertEq(totalPaid, 104_050_000);
+    }
+
+    function test_Gap7_AggregateYieldEntitlementCap() public {
+        assertEq(biz.totalYieldEntitlementBps(), 0);
+
+        _mint(user, YIELD, 1_000, 4_000, VEST_END, YIELD_START);
+        assertEq(biz.totalYieldEntitlementBps(), 4_000);
+
+        _mint(other, YIELD, 1_000, 5_000, VEST_END, YIELD_START);
+        assertEq(biz.totalYieldEntitlementBps(), 9_000);
+
+        vm.prank(minter);
+        vm.expectRevert(IBizSwap.EntitlementTooHigh.selector);
+        biz.mintCertificate(user, YIELD, 1_000, 1_001, VEST_END, YIELD_START, bytes32("2026-MAY"), "ipfs://x");
+
+        _mint(user, YIELD, 1_000, 1_000, VEST_END, YIELD_START);
+        assertEq(biz.totalYieldEntitlementBps(), 10_000);
+
+        vm.prank(minter);
+        vm.expectRevert(IBizSwap.EntitlementTooHigh.selector);
+        biz.mintCertificate(user, YIELD, 1_000, 1, VEST_END, YIELD_START, bytes32("2026-MAY"), "ipfs://x");
+
+        _mint(user, CREDIT, 10_000, 0, 0, 0);
+        assertEq(biz.totalYieldEntitlementBps(), 10_000);
     }
 
     function test_CloseYieldRound_BookkeepingOnly() public {

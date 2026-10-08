@@ -24,9 +24,14 @@ contract SmokeMainnet is Script {
         console2.log("Fee bps:      ", biz.PLATFORM_FEE_BPS());
         console2.log("Next tokenId: ", biz.nextTokenId());
         console2.log("Pool USDC:    ", biz.distributionPoolUsdcRaw());
+        console2.log("Credit Pool:  ", biz.creditPoolUsdcRaw());
+        console2.log("Bond Pool:    ", biz.bondPoolUsdcRaw());
+        console2.log("Yield Bps:    ", biz.totalYieldEntitlementBps());
+        console2.log("Max Rounds:   ", biz.MAX_YIELD_ROUNDS());
 
         require(biz.usdc() == EXPECTED_USDC, "unexpected USDC address");
         require(biz.PLATFORM_FEE_BPS() == 50, "unexpected fee bps");
+        require(biz.MAX_YIELD_ROUNDS() == 24, "unexpected max yield rounds");
 
         for (uint8 i = 0; i < 3; i++) {
             IBizSwap.Instrument memory inst = biz.instruments(i);
