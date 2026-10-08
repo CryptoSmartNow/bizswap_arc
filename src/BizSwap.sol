@@ -41,6 +41,7 @@ contract BizSwap is
 
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
     bytes32 public constant DISTRIBUTOR_ROLE = keccak256("DISTRIBUTOR_ROLE");
+    bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
 
     uint8 public constant MAX_INSTRUMENT_ID = 2;
     uint8 public constant INSTRUMENT_BIZ_YIELD = 0;
@@ -89,11 +90,15 @@ contract BizSwap is
         address admin,
         address minter,
         address revenueWallet_,
+        address upgrader_,
         address usdc_,
         string memory name_,
         string memory symbol_
     ) external initializer {
-        if (admin == address(0) || minter == address(0) || revenueWallet_ == address(0) || usdc_ == address(0)) {
+        if (
+            admin == address(0) || minter == address(0) || revenueWallet_ == address(0) || usdc_ == address(0)
+                || upgrader_ == address(0)
+        ) {
             revert ZeroAddress();
         }
 
@@ -107,6 +112,8 @@ contract BizSwap is
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(MINTER_ROLE, minter);
         _grantRole(DISTRIBUTOR_ROLE, admin);
+        _grantRole(UPGRADER_ROLE, admin);
+        _grantRole(UPGRADER_ROLE, upgrader_);
 
         revenueWallet = revenueWallet_;
         usdc = usdc_;
@@ -661,5 +668,15 @@ contract BizSwap is
         return super.supportsInterface(interfaceId);
     }
 
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+    function _authorizeUpgrade(
+        address /* newImplementation */
+    )
+        internal
+        view
+        override
+    {
+        if (!hasRole(UPGRADER_ROLE, msg.sender) && !hasRole(DEFAULT_ADMIN_ROLE, msg.sender)) {
+            _checkRole(UPGRADER_ROLE);
+        }
+    }
 }

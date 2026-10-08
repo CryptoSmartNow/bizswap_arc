@@ -114,6 +114,8 @@ interface IBizSwap {
 
     function DISTRIBUTOR_ROLE() external view returns (bytes32);
 
+    function UPGRADER_ROLE() external view returns (bytes32);
+
     function revenueWallet() external view returns (address);
 
     function usdc() external view returns (address);

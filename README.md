@@ -62,6 +62,7 @@ Access control is governed by OpenZeppelin's `AccessControlUpgradeable` via 32-b
 | Role Constant | `bytes32` Hex Identifier | Underlying Value / Calculation | Description & Permissions |
 | :--- | :--- | :--- | :--- |
 | `DEFAULT_ADMIN_ROLE` | `0x0000000000000000000000000000000000000000000000000000000000000000` | `bytes32(0)` | Setup instruments & schedules, pauses, UUPS upgrades, revenue wallet updates |
+| `UPGRADER_ROLE` | `0x189ab7a9244df0848122154315af71fe140f3db0fe014031783b0946b8c9d2e3` | `keccak256("UPGRADER_ROLE")` | Dedicated authority for `upgradeToAndCall` (held by deployer and admin) |
 | `MINTER_ROLE` | `0x9f2df0fed2c77648de5860a4cc508cd0818c85b8b8a1ab4ceeef8d981c8956a6` | `keccak256("MINTER_ROLE")` | Backend authority for `mintCertificate` only |
 | `DISTRIBUTOR_ROLE` | `0xfbd454f36a7e1a388bd6fc3ab10d434aa4578f811acbbcf33afb1c697486313c` | `keccak256("DISTRIBUTOR_ROLE")` | Funds pool (`depositDistributionUsdc`), opens yield rounds (`openYieldRound`) |
 
@@ -222,6 +223,33 @@ forge script script/DeployMainnet.s.sol:DeployMainnet \
 ```
 
 Deployment metadata is saved to `deployments/testnet-5042002.json` or `deployments/mainnet-5042.json`.
+
+### Upgrading the Contract
+
+BizSwap uses the UUPS upgrade pattern. Upgrades can be authorized by either the **Admin** (`DEFAULT_ADMIN_ROLE`) or the **Deployer** (`UPGRADER_ROLE`), while the deployer is strictly blocked from all other administrative privileges.
+
+To deploy a new implementation and upgrade the active proxy:
+
+```bash
+# load environmental variables first
+source .env
+
+# Upgrade on Arc Testnet (5042002)
+forge script script/Upgrade.s.sol:Upgrade \
+  --rpc-url $ARC_TESTNET_RPC_URL --broadcast
+
+# Upgrade on Arc Mainnet (5042) — requires CONFIRM_MAINNET=true
+CONFIRM_MAINNET=true forge script script/Upgrade.s.sol:Upgrade \
+  --rpc-url $ARC_MAINNET_RPC_URL --broadcast
+```
+
+The script automatically:
+1. Detects the target network (`5042002` testnet vs `5042` mainnet).
+2. Resolves the proxy address from `.env` or `./deployments/*.json`.
+3. Verifies pre-flight that the signing wallet holds `UPGRADER_ROLE` or `DEFAULT_ADMIN_ROLE`.
+4. Deploys the new `BizSwap` implementation and calls `proxy.upgradeToAndCall(...)`.
+5. Runs post-upgrade sanity checks (`name()`, `MAX_YIELD_ROUNDS()`, `usdc()`).
+6. Updates `.implementation` and `.upgradedAt` in `./deployments/*.json`.
 
 ### Verification
 

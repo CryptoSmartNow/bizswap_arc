@@ -23,6 +23,7 @@ contract BizSwapTest is Test {
     address internal admin = makeAddr("admin");
     address internal minter = makeAddr("minter");
     address internal revenue = makeAddr("revenue");
+    address internal deployer = makeAddr("deployer");
     address internal user = makeAddr("user");
     address internal other = makeAddr("other");
 
@@ -35,7 +36,7 @@ contract BizSwapTest is Test {
 
     function setUp() public {
         usdcToken = new MockUSDC();
-        biz = _deploy(admin, minter, revenue, address(usdcToken));
+        biz = _deploy(admin, minter, revenue, deployer, address(usdcToken));
 
         vm.startPrank(admin);
         biz.configureInstrument(YIELD, 1000, 1_000);
@@ -54,12 +55,13 @@ contract BizSwapTest is Test {
         vm.stopPrank();
     }
 
-    function _deploy(address admin_, address minter_, address revenue_, address usdc_)
+    function _deploy(address admin_, address minter_, address revenue_, address upgrader_, address usdc_)
         internal
         returns (BizSwap proxyAs)
     {
         BizSwap impl = new BizSwap();
-        bytes memory initData = abi.encodeCall(BizSwap.initialize, (admin_, minter_, revenue_, usdc_, "BizSwap", "BIZ"));
+        bytes memory initData =
+            abi.encodeCall(BizSwap.initialize, (admin_, minter_, revenue_, upgrader_, usdc_, "BizSwap", "BIZ"));
         ERC1967Proxy proxy = new ERC1967Proxy(address(impl), initData);
         proxyAs = BizSwap(address(proxy));
     }
@@ -101,6 +103,11 @@ contract BizSwapTest is Test {
         assertTrue(biz.hasRole(biz.DEFAULT_ADMIN_ROLE(), admin));
         assertTrue(biz.hasRole(biz.MINTER_ROLE(), minter));
         assertTrue(biz.hasRole(biz.DISTRIBUTOR_ROLE(), admin));
+        assertTrue(biz.hasRole(biz.UPGRADER_ROLE(), admin));
+        assertTrue(biz.hasRole(biz.UPGRADER_ROLE(), deployer));
+        assertFalse(biz.hasRole(biz.DEFAULT_ADMIN_ROLE(), deployer));
+        assertFalse(biz.hasRole(biz.MINTER_ROLE(), deployer));
+        assertFalse(biz.hasRole(biz.DISTRIBUTOR_ROLE(), deployer));
         assertEq(biz.revenueWallet(), revenue);
         assertEq(biz.usdc(), address(usdcToken));
         assertEq(biz.name(), "BizSwap");
@@ -337,6 +344,61 @@ contract BizSwapTest is Test {
         assertEq(biz.ownerOf(tokenId), user);
         assertEq(biz.certificates(tokenId).amountCents, 10_000);
         assertEq(BizSwapV2(address(biz)).version(), "v2");
+    }
+
+    function test_Upgrade_DeployerCanUpgrade() public {
+        BizSwapV2 v2 = new BizSwapV2();
+        vm.prank(deployer);
+        biz.upgradeToAndCall(address(v2), "");
+        assertEq(BizSwapV2(address(biz)).version(), "v2");
+    }
+
+    function test_Upgrade_AdminCanUpgrade() public {
+        BizSwapV2 v2 = new BizSwapV2();
+        vm.prank(admin);
+        biz.upgradeToAndCall(address(v2), "");
+        assertEq(BizSwapV2(address(biz)).version(), "v2");
+    }
+
+    function test_Upgrade_UnauthorizedReverts() public {
+        BizSwapV2 v2 = new BizSwapV2();
+        vm.prank(user);
+        vm.expectRevert();
+        biz.upgradeToAndCall(address(v2), "");
+    }
+
+    function test_DeployerCannotExecuteAdminFunctions() public {
+        vm.startPrank(deployer);
+
+        vm.expectRevert();
+        biz.configureInstrument(YIELD, 500, 500);
+
+        vm.expectRevert();
+        biz.configureSchedules(1_000_000, 7 days, 12, 10_404, 90 days, 8, 250);
+
+        vm.expectRevert();
+        biz.lockSchedules();
+
+        vm.expectRevert();
+        biz.setClaimsPaused(true);
+
+        vm.expectRevert();
+        biz.setRevenueWallet(other);
+
+        vm.expectRevert();
+        biz.mintCertificate(other, YIELD, 1_000, 500, VEST_END, YIELD_START, bytes32("2026-MAY"), "ipfs://x");
+
+        vm.expectRevert();
+        biz.openYieldRound(10e6);
+
+        vm.stopPrank();
+    }
+
+    function test_DeployerCannotGrantRoles() public {
+        bytes32 minterRole = biz.MINTER_ROLE();
+        vm.prank(deployer);
+        vm.expectRevert();
+        biz.grantRole(minterRole, other);
     }
 
     // ─── Security Bounds & Invariants ────────────────────────────────────────
@@ -635,7 +697,7 @@ contract BizSwapTest is Test {
 
     function test_Arc_CanonicalPredeployAddressConfig() public {
         address canonicalUSDC = 0x3600000000000000000000000000000000000000;
-        BizSwap arcBiz = _deploy(admin, minter, revenue, canonicalUSDC);
+        BizSwap arcBiz = _deploy(admin, minter, revenue, deployer, canonicalUSDC);
         assertEq(arcBiz.usdc(), canonicalUSDC);
         assertEq(arcBiz.usdcDecimals(), 6);
     }
