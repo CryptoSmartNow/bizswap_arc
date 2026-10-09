@@ -258,9 +258,10 @@ The script automatically:
 
 verify the contract implementation with the following command
 
-# CONFIRM CHAIN ID
+> CONFIRM CHAIN ID
 
 ```
+source .env
 arc-forge verify-contract <contract_address> \
 src/BizSwap.sol:BizSwap \
 --chain-id 5042002 \
