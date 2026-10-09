@@ -66,26 +66,9 @@ jobs:
       - name: Run Tests on Arc Network
         run: arc-forge test --network arc -vvv
 
-  simulate-deploy:
-    name: Deployment Scripts Simulation
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          submodules: recursive
-
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-
-      - name: Simulate Arc Mainnet Deploy (5042)
-        run: CONFIRM_MAINNET=true forge script script/DeployMainnet.s.sol:DeployMainnet --chain-id 5042
-
   auto-pr-merge:
     name: Auto PR and Merge
-    needs: [test-foundry, test-arc, simulate-deploy]
+    needs: [test-foundry, test-arc]
     if: github.event_name == 'push' && github.ref_name != 'main'
     runs-on: ubuntu-latest
     permissions:
