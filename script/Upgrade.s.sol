@@ -29,10 +29,9 @@ contract Upgrade is Script {
         try vm.envUint("ADMIN_PRIVATE_KEY") returns (uint256 k) {
             if (k != 0) return k;
         } catch {}
-        return
-            vm.envOr(
-                "DEPLOYER_PRIVATE_KEY", uint256(0xf776f736e398908c34b448f6301ddc9a5630c5ce96f2f595b80313ca9a339915)
-            );
+        uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
+        require(deployerKey != 0, "Upgrade: set UPGRADER_PRIVATE_KEY, ADMIN_PRIVATE_KEY, or DEPLOYER_PRIVATE_KEY");
+        return deployerKey;
     }
 
     function run() external {

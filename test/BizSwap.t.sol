@@ -800,4 +800,128 @@ contract BizSwapTest is Test {
         assertEq(paidLate, weeklyRaw);
         assertEq(paidLate, 8_670_000);
     }
+
+    function test_QuoteFee_InvalidInstrumentReverts() public {
+        vm.expectRevert(IBizSwap.InvalidInstrument.selector);
+        biz.quoteFee(9, 1_000);
+    }
+
+    function test_ConfigureSchedules_RejectsUnboundedValues() public {
+        vm.prank(admin);
+        vm.expectRevert(IBizSwap.InvalidSchedule.selector);
+        biz.configureSchedules(type(uint64).max, 12, 10_404, 90 days, 4, 250);
+
+        uint256 quarterBpsTooHigh = biz.MAX_BOND_QUARTER_BPS() + 1;
+        vm.prank(admin);
+        vm.expectRevert(IBizSwap.InvalidSchedule.selector);
+        biz.configureSchedules(7 days, 12, 10_404, 90 days, 4, quarterBpsTooHigh);
+    }
+
+    function test_ScheduleSnapshot_IgnoresLaterAdminChange() public {
+        uint64 t0 = 1_000_000;
+        vm.warp(t0);
+        uint256 tokenId = _mint(user, CREDIT, 10_000, 0, 0, 0);
+
+        IBizSwap.ScheduleSnap memory snap = biz.scheduleSnap(tokenId);
+        assertEq(snap.stepCount, 12);
+        assertEq(snap.rateBps, 10_404);
+        assertEq(snap.stepSeconds, 7 days);
+
+        vm.prank(admin);
+        biz.configureSchedules(7 days, 12, 20_000, 90 days, 4, 250);
+
+        vm.warp(t0 + 7 days);
+        assertEq(biz.claimable(tokenId), AmountCodec.centsToRaw(867, 6));
+    }
+
+    function test_Yield_NoRetroactiveClaim_ForLateMint() public {
+        vm.warp(YIELD_START);
+        uint256 alice = _mint(user, YIELD, 30_000, 3_000, YIELD_START, YIELD_START);
+        uint256 roundRaw = 100e6;
+        _fundYieldRound(roundRaw);
+
+        uint256 bob = _mint(other, YIELD, 70_000, 7_000, YIELD_START, YIELD_START);
+        assertEq(biz.claimable(bob), 0);
+        vm.prank(other);
+        vm.expectRevert(IBizSwap.NothingToClaim.selector);
+        biz.claim(bob);
+
+        vm.prank(user);
+        assertEq(biz.claim(alice), (roundRaw * 3_000) / 10_000);
+
+        _fundYieldRound(roundRaw);
+        assertEq(biz.claimable(alice), (roundRaw * 3_000) / 10_000);
+        assertEq(biz.claimable(bob), (roundRaw * 7_000) / 10_000);
+    }
+
+    function test_Claim_UnlocksWhenVestEnded() public {
+        uint256 tokenId = _mint(user, YIELD, 10_000, 1_000, VEST_END, YIELD_START);
+        vm.warp(YIELD_START);
+        _fundYieldRound(100e6);
+
+        vm.prank(user);
+        vm.expectRevert(IBizSwap.StillVesting.selector);
+        biz.claim(tokenId);
+
+        vm.warp(VEST_END);
+        assertEq(uint8(biz.certificates(tokenId).status), uint8(IBizSwap.Status.Vesting));
+        assertEq(biz.claimable(tokenId), 10e6);
+
+        vm.prank(user);
+        uint256 paid = biz.claim(tokenId);
+        assertEq(paid, 10e6);
+        assertEq(uint8(biz.certificates(tokenId).status), uint8(IBizSwap.Status.Active));
+    }
+
+    function test_ReclaimUnallocatedYield_LeavesHolderShare() public {
+        vm.warp(YIELD_START);
+        uint256 alice = _mint(user, YIELD, 30_000, 3_000, YIELD_START, YIELD_START);
+        uint256 roundRaw = 100e6;
+        uint256 roundId = _fundYieldRound(roundRaw);
+
+        uint256 unallocated = roundRaw - ((roundRaw * 3_000) / 10_000);
+        uint256 revenueBefore = usdcToken.balanceOf(revenue);
+
+        vm.prank(admin);
+        uint256 reclaimed = biz.reclaimUnallocatedYield(roundId);
+        assertEq(reclaimed, unallocated);
+        assertEq(usdcToken.balanceOf(revenue) - revenueBefore, unallocated);
+
+        vm.prank(user);
+        assertEq(biz.claim(alice), (roundRaw * 3_000) / 10_000);
+
+        vm.prank(admin);
+        vm.expectRevert(IBizSwap.ZeroAmount.selector);
+        biz.reclaimUnallocatedYield(roundId);
+    }
+
+    function test_ReclaimUnallocatedYield_NonDistributorReverts() public {
+        vm.warp(YIELD_START);
+        _mint(user, YIELD, 10_000, 1_000, YIELD_START, YIELD_START);
+        uint256 roundId = _fundYieldRound(100e6);
+
+        vm.prank(user);
+        vm.expectRevert();
+        biz.reclaimUnallocatedYield(roundId);
+    }
+
+    function test_RescueExcess_DoesNotTouchPools() public {
+        _fundPool(50e6);
+
+        usdcToken.mint(user, 7e6);
+        vm.prank(user);
+        usdcToken.transfer(address(biz), 7e6);
+
+        uint256 revenueBefore = usdcToken.balanceOf(revenue);
+        vm.prank(admin);
+        uint256 rescued = biz.rescueExcessUsdc();
+        assertEq(rescued, 7e6);
+        assertEq(usdcToken.balanceOf(revenue) - revenueBefore, 7e6);
+        assertEq(biz.creditPoolUsdcRaw(), 50e6);
+        assertEq(biz.bondPoolUsdcRaw(), 50e6);
+
+        vm.prank(admin);
+        vm.expectRevert(IBizSwap.ZeroAmount.selector);
+        biz.rescueExcessUsdc();
+    }
 }

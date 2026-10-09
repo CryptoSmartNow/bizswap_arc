@@ -37,6 +37,19 @@ interface IBizSwap {
         uint256 claimedUsdcRaw;
         uint64 openedAt;
         bool closed;
+        /// @notice Sum of yield entitlement bps minted before this round opened.
+        uint256 eligibleBps;
+        /// @notice Unallocated USDC already sent to the revenue wallet from this round.
+        uint256 reclaimedUsdcRaw;
+        /// @notice False on rounds opened before eligibility was snapshotted. Those rounds cannot be reclaimed.
+        bool snapshotted;
+    }
+
+    /// @notice Credit or bond terms copied onto a certificate at mint.
+    struct ScheduleSnap {
+        uint64 stepSeconds;
+        uint8 stepCount;
+        uint256 rateBps;
     }
 
     event CertificateMinted(
@@ -74,6 +87,12 @@ interface IBizSwap {
     event YieldRoundClosed(uint256 indexed roundId);
 
     event SchedulesLocked();
+
+    event ScheduleFrozen(uint256 indexed tokenId, uint64 stepSeconds, uint8 stepCount, uint256 rateBps);
+
+    event YieldUnallocatedReclaimed(uint256 indexed roundId, address indexed to, uint256 usdcRaw);
+
+    event ExcessUsdcRescued(address indexed to, uint256 usdcRaw);
 
     event ClaimsPausedChanged(bool paused);
 
@@ -138,6 +157,25 @@ interface IBizSwap {
     function quoteGross(uint8 instrumentId, uint256 netAmountCents) external pure returns (uint256 grossCents);
 
     function configureInstrument(uint8 instrumentId, uint256 supplyCap, uint256 minBuyInCents) external;
+
+    function configureSchedules(
+        uint64 creditWeekSeconds,
+        uint8 creditWeekCount,
+        uint256 creditTotalReturnBps,
+        uint64 bondQuarterSeconds,
+        uint8 bondMaxQuarters,
+        uint256 bondQuarterBps
+    ) external;
+
+    function scheduleSnap(uint256 tokenId) external view returns (ScheduleSnap memory);
+
+    function freezeSchedule(uint256 tokenId) external;
+
+    function yieldRounds(uint256 roundId) external view returns (YieldRound memory);
+
+    function reclaimUnallocatedYield(uint256 roundId) external returns (uint256 usdcRaw);
+
+    function rescueExcessUsdc() external returns (uint256 usdcRaw);
 
     function mintCertificate(
         address to,

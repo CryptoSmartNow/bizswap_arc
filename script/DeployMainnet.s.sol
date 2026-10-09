@@ -29,9 +29,8 @@ contract DeployMainnet is Script {
             "DeployMainnet: set CONFIRM_MAINNET=true to proceed (WARNING: Arc Mainnet moves real USDC)"
         );
 
-        uint256 deployerKey = vm.envOr(
-            "DEPLOYER_PRIVATE_KEY", uint256(0xf776f736e398908c34b448f6301ddc9a5630c5ce96f2f595b80313ca9a339915)
-        );
+        uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
+        require(deployerKey != 0, "DeployMainnet: DEPLOYER_PRIVATE_KEY is required");
         address deployer = vm.addr(deployerKey);
         address admin = _getEnvAddress("ADMIN", deployer);
         address minter = _getEnvAddress("MINTER", deployer);

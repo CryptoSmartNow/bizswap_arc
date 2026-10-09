@@ -59,12 +59,12 @@ flowchart TD
 
 Access control is governed by OpenZeppelin's `AccessControlUpgradeable` via 32-byte role identifiers (`bytes32`):
 
-| Role Constant | `bytes32` Hex Identifier | Underlying Value / Calculation | Description & Permissions |
-| :--- | :--- | :--- | :--- |
-| `DEFAULT_ADMIN_ROLE` | `0x0000000000000000000000000000000000000000000000000000000000000000` | `bytes32(0)` | Setup instruments & schedules, pauses, UUPS upgrades, revenue wallet updates |
-| `UPGRADER_ROLE` | `0x189ab7a9244df0848122154315af71fe140f3db0fe014031783b0946b8c9d2e3` | `keccak256("UPGRADER_ROLE")` | Dedicated authority for `upgradeToAndCall` (held by deployer and admin) |
-| `MINTER_ROLE` | `0x9f2df0fed2c77648de5860a4cc508cd0818c85b8b8a1ab4ceeef8d981c8956a6` | `keccak256("MINTER_ROLE")` | Backend authority for `mintCertificate` only |
-| `DISTRIBUTOR_ROLE` | `0xfbd454f36a7e1a388bd6fc3ab10d434aa4578f811acbbcf33afb1c697486313c` | `keccak256("DISTRIBUTOR_ROLE")` | Funds pool (`depositDistributionUsdc`), opens yield rounds (`openYieldRound`) |
+| Role Constant        | `bytes32` Hex Identifier                                             | Underlying Value / Calculation  | Description & Permissions                                                     |
+| :------------------- | :------------------------------------------------------------------- | :------------------------------ | :---------------------------------------------------------------------------- |
+| `DEFAULT_ADMIN_ROLE` | `0x0000000000000000000000000000000000000000000000000000000000000000` | `bytes32(0)`                    | Setup instruments & schedules, pauses, UUPS upgrades, revenue wallet updates  |
+| `UPGRADER_ROLE`      | `0x189ab7a9244df0848122154315af71fe140f3db0fe014031783b0946b8c9d2e3` | `keccak256("UPGRADER_ROLE")`    | Dedicated authority for `upgradeToAndCall` (held by deployer and admin)       |
+| `MINTER_ROLE`        | `0x9f2df0fed2c77648de5860a4cc508cd0818c85b8b8a1ab4ceeef8d981c8956a6` | `keccak256("MINTER_ROLE")`      | Backend authority for `mintCertificate` only                                  |
+| `DISTRIBUTOR_ROLE`   | `0xfbd454f36a7e1a388bd6fc3ab10d434aa4578f811acbbcf33afb1c697486313c` | `keccak256("DISTRIBUTOR_ROLE")` | Funds pool (`depositDistributionUsdc`), opens yield rounds (`openYieldRound`) |
 
 - **`revenueWallet`**: Treasury pointer (`address`) where off-chain purchase funds settle in Phase 1.
 - **`usdc`**: Canonical Arc USDC ERC-20 predeploy (`0x3600000000000000000000000000000000000000`).
@@ -134,21 +134,24 @@ Source of truth for ownership: **`ownerOf(tokenId)`** (ERC-721 standard).
 
 ### Phase 2 — USDC Distributions
 
-| Instrument    | Funding Mechanism                  | Claim Calculation                                        |
-| ------------- | ---------------------------------- | -------------------------------------------------------- |
-| **BizYield**  | `openYieldRound(usdcRaw)`          | `roundTotal * entitlementBps / 10_000` once per round    |
-| **BizCredit** | `depositDistributionUsdc(usdcRaw)` | 12 weekly installments of $8.67 per $100 unit totaling **104.04%** (4% interest) |
-| **BizBond**   | `depositDistributionUsdc(usdcRaw)` | **2.5%** ($25) per quarter for 4 quarters (annual), with $1,000 principal returned in Q4 ($1,025 final payout) |
+| Instrument    | Funding Mechanism                     | Claim Calculation                                                                                                                              |
+| ------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **BizYield**  | `openYieldRound(usdcRaw)`             | `roundTotal * entitlementBps / 10_000` once per round. A certificate only earns rounds opened after it was minted.                             |
+| **BizCredit** | `depositDistributionUsdc(1, usdcRaw)` | 12 weekly installments of $8.67 per $100 unit totaling **104.04%** (4% interest). Terms are snapshotted at mint.                               |
+| **BizBond**   | `depositDistributionUsdc(2, usdcRaw)` | **2.5%** ($25) per quarter for 4 quarters (annual), with $1,000 principal returned in Q4 ($1,025 final payout). Terms are snapshotted at mint. |
 
 - `claim(tokenId)`: Callable by certificate owner only; transfers 6-decimal USDC directly to owner.
-- Requires `Active` status (Yield/Bond must be unlocked after vesting).
+- If a Yield or Bond certificate is still `Vesting` but `block.timestamp >= vestEnd`, `claim` promotes it to `Active` and then pays. Before `vestEnd`, `claim` reverts `StillVesting`.
 - Solvency Guard: Credit/Bond claims revert (`InsufficientPool`) if distribution pool balance is insufficient; Yield rounds protect round allocations.
 - Admin emergency stop: `setClaimsPaused(true)` with emitted event.
 
 Schedule parameters:
 
-- Credit: 12 × 7-day weeks calculated from each certificate's purchase time (`purchaseTime + (w + 1) * 7 days`), `creditTotalReturnBps = 10404` (no calendar date dependencies)
-- Bond: 90-day quarters, `bondQuarterBps = 250`, max 4 quarters (annual maturity), 100% principal returned alongside Q4 coupon
+- Credit: 12 × 7-day weeks calculated from each certificate's purchase time (`purchaseTime + (w + 1) * 7 days`), `creditTotalReturnBps = 10404` (no calendar date dependencies). The week length, week count, and return bps are copied onto the certificate at mint.
+- Bond: 90-day quarters, `bondQuarterBps = 250`, max 4 quarters (annual maturity), 100% principal returned alongside Q4 coupon. Quarter length, quarter count, and coupon bps are copied onto the certificate at mint.
+- `configureSchedules` rejects zero and unbounded values (`MAX_STEP_SECONDS`, `MAX_CREDIT_WEEKS`, `MAX_CREDIT_RETURN_BPS`, `MAX_BOND_QUARTERS`, `MAX_BOND_QUARTER_BPS`).
+- `reclaimUnallocatedYield(roundId)` sends a snapshotted round's unsold USDC to `revenueWallet` and leaves `floor(total * eligibleBps / 10_000)` reserved for holders.
+- `rescueExcessUsdc()` sends only direct USDC transfers that are outside the pools and yield rounds to `revenueWallet`.
 
 ---
 
@@ -192,17 +195,17 @@ forge test -vv
 cp .env.example .env
 ```
 
-| Variable               | Description                                    |
-| ---------------------- | ---------------------------------------------- |
-| `DEPLOYER_PRIVATE_KEY` | Deployer key (must hold USDC for gas on Arc)   |
-| `ADMIN`                | Final admin address (after deployment handoff) |
-| `MINTER`               | Backend authority for `mintCertificate`        |
-| `REVENUE_WALLET`       | Platform fee and treasury pointer              |
-| `ARC_TESTNET_RPC_URL`  | `https://rpc.testnet.arc.io`                   |
-| `ARC_MAINNET_RPC_URL`  | `https://rpc.mainnet.arc.io`                   |
-| `CANONICAL_USDC`       | `0x3600000000000000000000000000000000000000`   |
-| `CONFIRM_MAINNET`      | Must be `true` to broadcast on Arc Mainnet     |
-| `PROXY_ADDRESS`        | Address of deployed BizSwap ERC1967 proxy      |
+| Variable               | Description                                                                                  |
+| ---------------------- | -------------------------------------------------------------------------------------------- |
+| `DEPLOYER_PRIVATE_KEY` | Deployer key (must hold USDC for gas on Arc). Required. Scripts do not embed a fallback key. |
+| `ADMIN`                | Final admin address (after deployment handoff)                                               |
+| `MINTER`               | Backend authority for `mintCertificate`                                                      |
+| `REVENUE_WALLET`       | Platform fee and treasury pointer                                                            |
+| `ARC_TESTNET_RPC_URL`  | `https://rpc.testnet.arc.io`                                                                 |
+| `ARC_MAINNET_RPC_URL`  | `https://rpc.mainnet.arc.io`                                                                 |
+| `CANONICAL_USDC`       | `0x3600000000000000000000000000000000000000`                                                 |
+| `CONFIRM_MAINNET`      | Must be `true` to broadcast on Arc Mainnet                                                   |
+| `PROXY_ADDRESS`        | Address of deployed BizSwap ERC1967 proxy                                                    |
 
 ### Deployment
 
@@ -243,6 +246,7 @@ CONFIRM_MAINNET=true forge script script/Upgrade.s.sol:Upgrade \
 ```
 
 The script automatically:
+
 1. Detects the target network (`5042002` testnet vs `5042` mainnet).
 2. Resolves the proxy address from `.env` or `./deployments/*.json`.
 3. Verifies pre-flight that the signing wallet holds `UPGRADER_ROLE` or `DEFAULT_ADMIN_ROLE`.
@@ -254,10 +258,11 @@ The script automatically:
 
 verify the contract implementation with the following command
 
+# CONFIRM CHAIN ID
+
 ```
 arc-forge verify-contract <contract_address> \
 src/BizSwap.sol:BizSwap \
-# CONFIRM CHAIN ID
 --chain-id 5042002 \
 --verifier blockscout \
 --verifier-url https://explorer.testnet.arc.io/api/
@@ -291,7 +296,14 @@ npm install viem wagmi @tanstack/react-query
 
 ```typescript
 // client.ts
-import { createPublicClient, http, getContract, keccak256, toHex, formatUnits } from "viem";
+import {
+  createPublicClient,
+  http,
+  getContract,
+  keccak256,
+  toHex,
+  formatUnits,
+} from "viem";
 import { arcTestnet, arc } from "viem/chains";
 import { bizSwapAbi } from "./abi/BizSwap";
 
@@ -332,10 +344,7 @@ const isAdmin = await bizSwap.read.hasRole([
   userAddress,
 ]);
 
-const isMinter = await bizSwap.read.hasRole([
-  ROLES.MINTER_ROLE,
-  userAddress,
-]);
+const isMinter = await bizSwap.read.hasRole([ROLES.MINTER_ROLE, userAddress]);
 
 const isDistributor = await bizSwap.read.hasRole([
   ROLES.DISTRIBUTOR_ROLE,
@@ -351,12 +360,27 @@ const revenueWallet = await bizSwap.read.revenueWallet();
 ### 4. Reading & Decoding Contract State
 
 #### A. Instrument Configuration (`instruments`)
-`instruments(uint8 id)` returns a tuple of 5 fields:
-- `id`: `0` (BizYield), `1` (BizCredit), `2` (BizBond)
+
+`instruments(uint8 id)` returns the `Instrument` struct, in this order:
+
+- `configured` (`bool`)
+- `supplyCap` (`uint256`)
+- `currentSupply` (`uint256`)
+- `minBuyInCents` (`uint256`, USDC cents)
+- `totalInvestedCents` (`uint256`)
+- `totalFeesCents` (`uint256`)
+
+`id` is the argument: `0` BizYield, `1` BizCredit, `2` BizBond.
 
 ```typescript
-const [supplyCap, currentSupply, minBuyInCents, totalInvestedCents, totalFeesCents] =
-  await bizSwap.read.instruments([0]);
+const [
+  configured,
+  supplyCap,
+  currentSupply,
+  minBuyInCents,
+  totalInvestedCents,
+  totalFeesCents,
+] = await bizSwap.read.instruments([0]);
 
 // Units Note: Monetary values in instrument config are USDC CENTS (2 decimals):
 const minBuyInUsd = Number(minBuyInCents) / 100; // e.g. 1000 cents -> $10.00
@@ -364,27 +388,28 @@ const totalInvestedUsd = Number(totalInvestedCents) / 100;
 ```
 
 #### B. Certificate Records (`certificates`)
-`certificates(uint256 tokenId)` returns a tuple of 10 fields:
+
+`certificates(uint256 tokenId)` returns the `Certificate` struct, in this order:
 
 ```typescript
 const [
-  instrumentId,      // uint8: 0 = BizYield, 1 = BizCredit, 2 = BizBond
-  amountCents,       // uint64: Net principal in USDC cents (divide by 100 for $)
-  feeCents,          // uint64: Upfront fee in USDC cents (divide by 100 for $)
-  entitlementBps,    // uint16: Yield pool entitlement (100 bps = 1.00%, 10_000 = 100%)
-  purchaseTime,      // uint64: Unix timestamp (seconds)
-  vestEnd,           // uint64: Vesting unlock timestamp (seconds)
-  yieldStart,        // uint64: Yield accrual start timestamp (seconds)
-  status,            // uint8: 0 = Vesting, 1 = Active, 2 = Redeemed
-  serial,            // uint32: Per-instrument issuance number
-  cycle              // uint16: Issuance cycle
+  instrumentId, // uint8: 0 = BizYield, 1 = BizCredit, 2 = BizBond
+  amountCents, // uint256: Net principal in USDC cents (divide by 100 for $)
+  feeCents, // uint256: Upfront fee in USDC cents (divide by 100 for $)
+  entitlementBps, // uint256: Yield pool entitlement (100 bps = 1.00%, 10_000 = 100%)
+  purchaseTime, // uint64: Unix timestamp (seconds)
+  vestEnd, // uint64: Vesting unlock timestamp (seconds)
+  yieldStart, // uint64: Yield accrual start timestamp (seconds)
+  status, // uint8: 0 = Vesting, 1 = Active, 2 = Redeemed
+  serial, // uint32: Per-instrument issuance number
+  cycle, // bytes32: Issuance cycle
 ] = await bizSwap.read.certificates([tokenId]);
 
 // Status decoding helper
 export const CertificateStatus = {
-  0: "Vesting",   // Transfers locked until vestEnd; call unlock(tokenId) once vestEnd reached
-  1: "Active",    // Unlocked; eligible for distribution claims
-  2: "Redeemed",  // Fully redeemed
+  0: "Vesting", // Transfers locked until vestEnd; call unlock(tokenId) once vestEnd reached
+  1: "Active", // Unlocked; eligible for distribution claims
+  2: "Redeemed", // Fully redeemed
 } as const;
 
 const isVesting = status === 0;
@@ -393,6 +418,7 @@ const entitlementPercentage = Number(entitlementBps) / 100; // e.g. 50 bps -> 0.
 ```
 
 #### C. Claimable Distribution Balances (`claimable`)
+
 `claimable(uint256 tokenId)` returns raw 6-decimal USDC claimable by the certificate owner:
 
 ```typescript
@@ -430,8 +456,8 @@ To fund distributions (admin / distributor backend):
 // 1. Approve USDC to BizSwap proxy
 await usdcContract.write.approve([BIZSWAP_PROXY, amountUsdcRaw]);
 
-// 2. Deposit into Credit/Bond pool
-await bizSwap.write.depositDistributionUsdc([amountUsdcRaw]);
+// 2. Deposit into the Credit (1) or Bond (2) pool
+await bizSwap.write.depositDistributionUsdc([1, amountUsdcRaw]);
 
 // OR open a BizYield round
 await bizSwap.write.openYieldRound([amountUsdcRaw]);
@@ -446,10 +472,10 @@ When interacting via the **Arc Blockscout Explorer** ([explorer.testnet.arc.io](
    - **Do NOT enter plain text strings** like `DEFAULT_ADMIN_ROLE` or `MINTER_ROLE`. Blockscout expects a raw 32-byte hex string and will display an **`Invalid bytes format`** error.
    - **Enter the 32-byte hex string** starting with `0x`:
 
-| Field in Explorer | For Admin Check | For Minter Check | For Distributor Check |
-| :--- | :--- | :--- | :--- |
-| **`role (bytes32)*`** | `0x0000000000000000000000000000000000000000000000000000000000000000` | `0x9f2df0fed2c77648de5860a4cc508cd0818c85b8b8a1ab4ceeef8d981c8956a6` | `0xfbd454f36a7e1a388bd6fc3ab10d434aa4578f811acbbcf33afb1c697486313c` |
-| **`account (address)*`** | Account address (`0x...`) | Account address (`0x...`) | Account address (`0x...`) |
+| Field in Explorer        | For Admin Check                                                      | For Minter Check                                                     | For Distributor Check                                                |
+| :----------------------- | :------------------------------------------------------------------- | :------------------------------------------------------------------- | :------------------------------------------------------------------- |
+| **`role (bytes32)*`**    | `0x0000000000000000000000000000000000000000000000000000000000000000` | `0x9f2df0fed2c77648de5860a4cc508cd0818c85b8b8a1ab4ceeef8d981c8956a6` | `0xfbd454f36a7e1a388bd6fc3ab10d434aa4578f811acbbcf33afb1c697486313c` |
+| **`account (address)*`** | Account address (`0x...`)                                            | Account address (`0x...`)                                            | Account address (`0x...`)                                            |
 
 3. For **`instruments`**: Enter `0` for BizYield, `1` for BizCredit, or `2` for BizBond.
 4. For **`certificates`** / **`claimable`**: Enter the numeric `tokenId` (e.g. `1`).
@@ -458,22 +484,25 @@ When interacting via the **Arc Blockscout Explorer** ([explorer.testnet.arc.io](
 
 ## 6. Public API Summary
 
-| Function                  | Access      | Purpose                                                       |
-| ------------------------- | ----------- | ------------------------------------------------------------- |
-| `initialize(...)`         | initializer | Initialize proxy with admin, minter, revenue wallet, and USDC |
-| `configureInstrument`     | admin       | Update supply caps and minimum buy-ins                        |
-| `configureSchedules`      | admin       | Update schedule parameters before locking                     |
-| `lockSchedules`           | admin       | Permanently lock financial schedule parameters                |
-| `mintCertificate`         | minter      | Mint RWA certificate NFT after payment verification           |
-| `unlock`                  | anyone      | Unlock certificate after vesting end timestamp                |
-| `depositDistributionUsdc` | distributor | Deposit USDC into Credit/Bond distribution pool               |
-| `openYieldRound`          | distributor | Fund and open a new BizYield revenue round                    |
-| `closeYieldRound`         | distributor | Mark a yield round closed (bookkeeping)                       |
-| `claim`                   | token owner | Claim all matured USDC payouts                                |
-| `claimable`               | view        | Preview claimable USDC for a certificate                      |
-| `quoteFee` / `quoteGross` | view        | Calculate 0.5% fee on net buy-ins                             |
-| `setClaimsPaused`         | admin       | Pause or unpause holder distribution claims                   |
-| `upgradeToAndCall`        | admin       | UUPS implementation contract upgrade                          |
+| Function                  | Access      | Purpose                                                              |
+| ------------------------- | ----------- | -------------------------------------------------------------------- |
+| `initialize(...)`         | initializer | Initialize proxy with admin, minter, revenue wallet, and USDC        |
+| `configureInstrument`     | admin       | Update supply caps and minimum buy-ins                               |
+| `configureSchedules`      | admin       | Update schedule parameters before locking                            |
+| `lockSchedules`           | admin       | Permanently lock financial schedule parameters                       |
+| `mintCertificate`         | minter      | Mint RWA certificate NFT after payment verification                  |
+| `unlock`                  | anyone      | Unlock certificate after vesting end timestamp                       |
+| `depositDistributionUsdc` | distributor | Deposit USDC into Credit/Bond distribution pool                      |
+| `openYieldRound`          | distributor | Fund and open a new BizYield revenue round                           |
+| `closeYieldRound`         | distributor | Mark a yield round closed (bookkeeping)                              |
+| `reclaimUnallocatedYield` | distributor | Send a round's unsold USDC to `revenueWallet`                        |
+| `rescueExcessUsdc`        | distributor | Send direct USDC transfers that are not in a pool to `revenueWallet` |
+| `freezeSchedule`          | anyone      | Snapshot the current global schedule onto a legacy certificate       |
+| `claim`                   | token owner | Claim matured USDC. Unlocks Yield/Bond once `vestEnd` has passed.    |
+| `claimable`               | view        | Preview claimable USDC for a certificate                             |
+| `quoteFee` / `quoteGross` | view        | Calculate 0.5% fee on net buy-ins                                    |
+| `setClaimsPaused`         | admin       | Pause or unpause holder distribution claims                          |
+| `upgradeToAndCall`        | admin       | UUPS implementation contract upgrade                                 |
 
 ---
 
