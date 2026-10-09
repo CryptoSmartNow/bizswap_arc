@@ -28,6 +28,7 @@ contract SmokeTestnet is Script {
         console2.log("Bond Pool:    ", biz.bondPoolUsdcRaw());
         console2.log("Yield Bps:    ", biz.totalYieldEntitlementBps());
         console2.log("Max Rounds:   ", biz.MAX_YIELD_ROUNDS());
+        console2.log("Upgrader Role:", vm.toString(biz.UPGRADER_ROLE()));
 
         require(biz.usdc() == EXPECTED_USDC, "unexpected USDC address");
         require(biz.PLATFORM_FEE_BPS() == 50, "unexpected fee bps");

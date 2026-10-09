@@ -59,7 +59,6 @@ interface IBizSwap {
     event RevenueWalletUpdated(address indexed revenueWallet);
 
     event SchedulesConfigured(
-        uint64 creditFirstPayment,
         uint64 creditWeekSeconds,
         uint8 creditWeekCount,
         uint256 creditTotalReturnBps,
@@ -113,6 +112,8 @@ interface IBizSwap {
     function MINTER_ROLE() external view returns (bytes32);
 
     function DISTRIBUTOR_ROLE() external view returns (bytes32);
+
+    function UPGRADER_ROLE() external view returns (bytes32);
 
     function revenueWallet() external view returns (address);
 

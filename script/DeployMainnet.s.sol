@@ -36,12 +36,14 @@ contract DeployMainnet is Script {
         address admin = _getEnvAddress("ADMIN", deployer);
         address minter = _getEnvAddress("MINTER", deployer);
         address revenueWallet = _getEnvAddress("REVENUE_WALLET", deployer);
+        address upgrader = _getEnvAddress("UPGRADER", deployer);
 
         vm.startBroadcast(deployerKey);
 
         BizSwap impl = new BizSwap();
-        bytes memory initData =
-            abi.encodeCall(BizSwap.initialize, (admin, minter, revenueWallet, CANONICAL_USDC, "BizSwap", "BIZ"));
+        bytes memory initData = abi.encodeCall(
+            BizSwap.initialize, (admin, minter, revenueWallet, upgrader, CANONICAL_USDC, "BizSwap", "BIZ")
+        );
         ERC1967Proxy proxy = new ERC1967Proxy(address(impl), initData);
         BizSwap biz = BizSwap(address(proxy));
 
@@ -53,18 +55,22 @@ contract DeployMainnet is Script {
         console2.log("Proxy (BizSwap):  ", address(proxy));
         console2.log("USDC:             ", CANONICAL_USDC);
         console2.log("Admin:            ", admin);
+        console2.log("Upgrader:         ", upgrader);
         console2.log("Minter:           ", minter);
         console2.log("Revenue:          ", revenueWallet);
         console2.log("Fee bps:          ", biz.PLATFORM_FEE_BPS());
 
-        // Automatically update deployments/mainnet-5042.json
-        string memory jsonPath = "./deployments/mainnet-5042.json";
-        vm.writeJson(vm.toString(address(proxy)), jsonPath, ".proxy");
-        vm.writeJson(vm.toString(address(impl)), jsonPath, ".implementation");
-        vm.writeJson(vm.toString(CANONICAL_USDC), jsonPath, ".usdc");
-        vm.writeJson(vm.toString(admin), jsonPath, ".admin");
-        vm.writeJson(vm.toString(minter), jsonPath, ".minter");
-        vm.writeJson(vm.toString(revenueWallet), jsonPath, ".revenueWallet");
-        vm.writeJson(vm.toString(block.timestamp), jsonPath, ".deployedAt");
+        // Automatically update deployments/mainnet-5042.json on live broadcasts
+        if (block.timestamp > 1_000_000_000) {
+            string memory jsonPath = "./deployments/mainnet-5042.json";
+            vm.writeJson(vm.toString(address(proxy)), jsonPath, ".proxy");
+            vm.writeJson(vm.toString(address(impl)), jsonPath, ".implementation");
+            vm.writeJson(vm.toString(CANONICAL_USDC), jsonPath, ".usdc");
+            vm.writeJson(vm.toString(admin), jsonPath, ".admin");
+            vm.writeJson(vm.toString(upgrader), jsonPath, ".upgrader");
+            vm.writeJson(vm.toString(minter), jsonPath, ".minter");
+            vm.writeJson(vm.toString(revenueWallet), jsonPath, ".revenueWallet");
+            vm.writeJson(vm.toString(block.timestamp), jsonPath, ".deployedAt");
+        }
     }
 }
