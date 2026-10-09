@@ -3,7 +3,7 @@
   "network": "Arc Testnet",
   "contract": "BizSwap",
   "proxy": "0x017D70b575a36452D0Cf3d3cE8CD374006De150b",
-  "implementation": "0xeD14B6fe3794fa0986F585E5286EA6A94f4d383F",
+  "implementation": "0x914459F93dD1605a0cf5115Efb3B1A37A6De4015",
   "usdc": "0x3600000000000000000000000000000000000000",
   "admin": "0x038a4e7c11193eBdF6FE574bD9eCf6989c8bEafe",
   "minter": "0x72578e136E72A18A832be6762230a820f514d180",
@@ -15,5 +15,6 @@
   ],
   "deployedAt": 1791426036,
   "txHash": "0x0b685e299c9498af62088c035031fee962ea82d53a77a5a64cf5fe54d58914c9",
-  "upgrader": "0x4d222a5E4acfA1fEBB43CF0265479478EF75bD92"
+  "upgrader": "0x4d222a5E4acfA1fEBB43CF0265479478EF75bD92",
+  "upgradedAt": 1791543225
 }
