@@ -44,12 +44,11 @@ contract BizSwapTest is Test {
         biz.configureInstrument(BOND, 1000, 100_000);
         // Use controllable schedule times for tests
         biz.configureSchedules({
-            creditFirstPayment_: 1_000_000,
             creditWeekSeconds_: 7 days,
             creditWeekCount_: 12,
             creditTotalReturnBps_: 10_404,
             bondQuarterSeconds_: 90 days,
-            bondMaxQuarters_: 8,
+            bondMaxQuarters_: 4,
             bondQuarterBps_: 250
         });
         vm.stopPrank();
@@ -234,6 +233,8 @@ contract BizSwapTest is Test {
     // ─── Phase 2 Credit ──────────────────────────────────────────────────────
 
     function test_CreditClaim_TwelveWeeks() public {
+        uint64 t0 = 1_000_000;
+        vm.warp(t0);
         uint256 tokenId = _mint(user, CREDIT, 10_000, 0, 0, 0); // $100
 
         uint256 totalPayoutCents = (10_000 * 10_404) / 10_000; // 10404
@@ -243,18 +244,21 @@ contract BizSwapTest is Test {
 
         _fundPool(totalRaw + 1e6);
 
-        // before first payment
-        vm.warp(999_999);
+        // immediately at purchase: nothing claimable
         assertEq(biz.claimable(tokenId), 0);
 
-        // week 0
-        vm.warp(1_000_000);
+        // before end of week 1
+        vm.warp(t0 + 7 days - 1);
+        assertEq(biz.claimable(tokenId), 0);
+
+        // week 1 (end of first week)
+        vm.warp(t0 + 7 days);
         assertEq(biz.claimable(tokenId), weeklyRaw);
         vm.prank(user);
         assertEq(biz.claim(tokenId), weeklyRaw);
 
-        // jump to end of all weeks
-        vm.warp(1_000_000 + 11 * 7 days);
+        // jump to end of all 12 weeks
+        vm.warp(t0 + 12 * 7 days);
         uint256 remaining = weeklyRaw * 11;
         assertEq(biz.claimable(tokenId), remaining);
         vm.prank(user);
@@ -265,8 +269,10 @@ contract BizSwapTest is Test {
     }
 
     function test_Credit_InsufficientPool() public {
+        uint64 t0 = 1_000_000;
+        vm.warp(t0);
         uint256 tokenId = _mint(user, CREDIT, 10_000, 0, 0, 0);
-        vm.warp(1_000_000 + 12 * 7 days);
+        vm.warp(t0 + 12 * 7 days);
         // no funding
         vm.prank(user);
         vm.expectRevert(IBizSwap.InsufficientPool.selector);
@@ -282,25 +288,38 @@ contract BizSwapTest is Test {
 
         uint256 quarterCents = (100_000 * 250) / 10_000; // 2500 cents = $25
         uint256 quarterRaw = AmountCodec.centsToRaw(quarterCents, 6);
-        _fundPool(quarterRaw * 8);
+        uint256 principalRaw = AmountCodec.centsToRaw(100_000, 6); // $1000 = 1000e6
+        uint256 totalBondPayout = quarterRaw * 4 + principalRaw; // $1,100 total
+        _fundPool(totalBondPayout);
 
-        // first quarter at yieldStart
+        // quarter 0 at yieldStart
         vm.warp(YIELD_START);
         assertEq(biz.claimable(tokenId), quarterRaw);
         vm.prank(user);
         assertEq(biz.claim(tokenId), quarterRaw);
 
-        // second quarter
+        // quarter 1 at yieldStart + 90 days
         vm.warp(YIELD_START + 90 days);
+        assertEq(biz.claimable(tokenId), quarterRaw);
         vm.prank(user);
         assertEq(biz.claim(tokenId), quarterRaw);
 
-        // remaining 6 quarters
-        vm.warp(YIELD_START + 7 * 90 days);
+        // quarter 2 at yieldStart + 180 days
+        vm.warp(YIELD_START + 2 * 90 days);
+        assertEq(biz.claimable(tokenId), quarterRaw);
         vm.prank(user);
-        assertEq(biz.claim(tokenId), quarterRaw * 6);
+        assertEq(biz.claim(tokenId), quarterRaw);
+
+        // quarter 3 (final quarter 4) at yieldStart + 270 days: pays coupon + principal ($1,025)
+        vm.warp(YIELD_START + 3 * 90 days);
+        uint256 finalDue = quarterRaw + principalRaw;
+        assertEq(biz.claimable(tokenId), finalDue);
+        vm.prank(user);
+        assertEq(biz.claim(tokenId), finalDue);
 
         assertEq(uint8(biz.certificates(tokenId).status), uint8(IBizSwap.Status.Redeemed));
+        assertEq(biz.claimable(tokenId), 0);
+        assertEq(usdcToken.balanceOf(user), totalBondPayout);
     }
 
     // ─── Auth / pause ────────────────────────────────────────────────────────
@@ -374,7 +393,7 @@ contract BizSwapTest is Test {
         biz.configureInstrument(YIELD, 500, 500);
 
         vm.expectRevert();
-        biz.configureSchedules(1_000_000, 7 days, 12, 10_404, 90 days, 8, 250);
+        biz.configureSchedules(7 days, 12, 10_404, 90 days, 4, 250);
 
         vm.expectRevert();
         biz.lockSchedules();
@@ -542,22 +561,20 @@ contract BizSwapTest is Test {
         // Weekly raw: 867 cents = 8.67 USDC = 8_670_000 raw units
         // Week 12: 867 + 1 = 868 cents = 8.68 USDC = 8_680_000 raw units
         // Total expected = 10,405 cents = 104.05 USDC = 104_050_000 raw units
+        uint64 t0 = 1_000_000;
+        vm.warp(t0);
         uint256 principalCents = 10_001;
         uint256 tokenId = _mint(user, CREDIT, principalCents, 0, 0, 0);
 
         _fundPool(200e6);
 
-        vm.warp(1_000_000); // creditFirstPayment
-
         uint256 totalPaid = 0;
-        for (uint256 week = 0; week < 12; week++) {
-            if (week > 0) {
-                vm.warp(1_000_000 + week * 7 days);
-            }
+        for (uint256 week = 1; week <= 12; week++) {
+            vm.warp(t0 + week * 7 days);
             vm.prank(user);
             uint256 paid = biz.claim(tokenId);
             totalPaid += paid;
-            if (week < 11) {
+            if (week < 12) {
                 assertEq(paid, 8_670_000);
             } else {
                 // Final week (week 12) receives weekly payout plus the 1 cent remainder
@@ -636,12 +653,11 @@ contract BizSwapTest is Test {
         vm.prank(admin);
         vm.expectRevert(IBizSwap.SchedulesAreLocked.selector);
         biz.configureSchedules({
-            creditFirstPayment_: 2_000_000,
             creditWeekSeconds_: 7 days,
             creditWeekCount_: 12,
             creditTotalReturnBps_: 10_404,
             bondQuarterSeconds_: 90 days,
-            bondMaxQuarters_: 8,
+            bondMaxQuarters_: 4,
             bondQuarterBps_: 250
         });
     }
@@ -700,5 +716,88 @@ contract BizSwapTest is Test {
         BizSwap arcBiz = _deploy(admin, minter, revenue, deployer, canonicalUSDC);
         assertEq(arcBiz.usdc(), canonicalUSDC);
         assertEq(arcBiz.usdcDecimals(), 6);
+    }
+
+    // ─── Gap 1 & Gap 2 Remediations ──────────────────────────────────────────
+
+    function test_Gap1_Bond_AnnualMaturityAndPrincipalReturn() public {
+        assertEq(biz.bondMaxQuarters(), 4);
+
+        uint256 bondId = _mint(user, BOND, 100_000, 0, VEST_END, YIELD_START); // $1,000 unit
+        vm.warp(VEST_END);
+        biz.unlock(bondId);
+
+        uint256 quarterRaw = AmountCodec.centsToRaw(2_500, 6); // $25 USDC
+        uint256 principalRaw = AmountCodec.centsToRaw(100_000, 6); // $1,000 USDC
+        _fundPool(quarterRaw * 4 + principalRaw);
+
+        // Q0, Q1, Q2 pay only quarterly coupons ($25 each)
+        for (uint8 q = 0; q < 3; q++) {
+            vm.warp(YIELD_START + uint256(q) * 90 days);
+            assertEq(biz.claimable(bondId), quarterRaw);
+            vm.prank(user);
+            uint256 paid = biz.claim(bondId);
+            assertEq(paid, quarterRaw);
+            assertEq(uint8(biz.certificates(bondId).status), uint8(IBizSwap.Status.Active));
+        }
+
+        // Q3 (the 4th and final quarter) pays $25 coupon + $1,000 principal = $1,025
+        vm.warp(YIELD_START + 3 * 90 days);
+        uint256 expectedFinal = quarterRaw + principalRaw; // 1,025 USDC
+        assertEq(biz.claimable(bondId), expectedFinal);
+
+        vm.prank(user);
+        uint256 paidFinal = biz.claim(bondId);
+        assertEq(paidFinal, expectedFinal);
+        assertEq(paidFinal, 1_025e6);
+
+        // Certificate is now redeemed
+        assertEq(uint8(biz.certificates(bondId).status), uint8(IBizSwap.Status.Redeemed));
+        assertEq(biz.claimable(bondId), 0);
+
+        // Total received across all 4 quarters: $1,100 USDC
+        assertEq(usdcToken.balanceOf(user), 1_100e6);
+    }
+
+    function test_Gap2_Credit_NoRetroactiveDrain_StaggeredPurchases() public {
+        uint64 t0 = 1_000_000;
+        vm.warp(t0);
+
+        // Early buyer purchases at t0
+        uint256 certEarly = _mint(user, CREDIT, 10_000, 0, 0, 0); // $100
+
+        // Fund credit distribution pool
+        _fundPool(1_000e6);
+
+        // At purchase time: early buyer cannot claim anything
+        assertEq(biz.claimable(certEarly), 0);
+
+        // Advance 30 days (approx 4.2 weeks)
+        uint64 tLate = t0 + 30 days;
+        vm.warp(tLate);
+
+        // Late buyer purchases at t0 + 30 days
+        uint256 certLate = _mint(other, CREDIT, 10_000, 0, 0, 0); // $100
+
+        // Early buyer has 4 weeks matured (30 days >= 4 * 7 days = 28 days)
+        uint256 weeklyRaw = AmountCodec.centsToRaw(867, 6); // 8.67 USDC
+        assertEq(biz.claimable(certEarly), weeklyRaw * 4);
+
+        // CRITICAL CHECK: Late buyer has ZERO claimable immediately at purchase time!
+        // No retroactive drain of elapsed calendar weeks!
+        assertEq(biz.claimable(certLate), 0);
+        vm.prank(other);
+        vm.expectRevert(IBizSwap.NothingToClaim.selector);
+        biz.claim(certLate);
+
+        // Advance 7 days from late buyer's purchase (tLate + 7 days)
+        vm.warp(tLate + 7 days);
+
+        // Now late buyer has exactly 1 week ($8.67) claimable
+        assertEq(biz.claimable(certLate), weeklyRaw);
+        vm.prank(other);
+        uint256 paidLate = biz.claim(certLate);
+        assertEq(paidLate, weeklyRaw);
+        assertEq(paidLate, 8_670_000);
     }
 }

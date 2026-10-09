@@ -137,8 +137,8 @@ Source of truth for ownership: **`ownerOf(tokenId)`** (ERC-721 standard).
 | Instrument    | Funding Mechanism                  | Claim Calculation                                        |
 | ------------- | ---------------------------------- | -------------------------------------------------------- |
 | **BizYield**  | `openYieldRound(usdcRaw)`          | `roundTotal * entitlementBps / 10_000` once per round    |
-| **BizCredit** | `depositDistributionUsdc(usdcRaw)` | 12 weekly installments totaling **104.04%** of principal |
-| **BizBond**   | `depositDistributionUsdc(usdcRaw)` | **2.5%** of principal per quarter (default 8 quarters)   |
+| **BizCredit** | `depositDistributionUsdc(usdcRaw)` | 12 weekly installments of $8.67 per $100 unit totaling **104.04%** (4% interest) |
+| **BizBond**   | `depositDistributionUsdc(usdcRaw)` | **2.5%** ($25) per quarter for 4 quarters (annual), with $1,000 principal returned in Q4 ($1,025 final payout) |
 
 - `claim(tokenId)`: Callable by certificate owner only; transfers 6-decimal USDC directly to owner.
 - Requires `Active` status (Yield/Bond must be unlocked after vesting).
@@ -147,9 +147,8 @@ Source of truth for ownership: **`ownerOf(tokenId)`** (ERC-721 standard).
 
 Schedule parameters:
 
-- Credit first payment default: **2026-06-15 00:00:00 UTC** (`1_781_481_600`)
-- Credit: 12 × 7-day weeks, `creditTotalReturnBps = 10404`
-- Bond: 90-day quarters, `bondQuarterBps = 250`, max 8 quarters
+- Credit: 12 × 7-day weeks calculated from each certificate's purchase time (`purchaseTime + (w + 1) * 7 days`), `creditTotalReturnBps = 10404` (no calendar date dependencies)
+- Bond: 90-day quarters, `bondQuarterBps = 250`, max 4 quarters (annual maturity), 100% principal returned alongside Q4 coupon
 
 ---
 

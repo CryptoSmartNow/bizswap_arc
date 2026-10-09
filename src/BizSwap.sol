@@ -59,8 +59,7 @@ contract BizSwap is
     uint256 public nextYieldRoundId;
     uint256 public totalYieldEntitlementBps;
 
-    // Credit schedule (product defaults: Jun 15 2026, 12 weeks, 104.04% total)
-    uint64 public creditFirstPayment;
+    // Credit schedule (12 weeks, 104.04% total)
     uint64 public creditWeekSeconds;
     uint8 public creditWeekCount;
     uint256 public creditTotalReturnBps;
@@ -122,13 +121,12 @@ contract BizSwap is
         nextYieldRoundId = 1;
 
         // Product schedule defaults (UTC)
-        creditFirstPayment = 1_781_481_600; // 2026-06-15 00:00:00 UTC
         creditWeekSeconds = 7 days;
         creditWeekCount = 12;
         creditTotalReturnBps = 10_404; // 104.04% of principal
 
         bondQuarterSeconds = 90 days;
-        bondMaxQuarters = 8;
+        bondMaxQuarters = 4; // 4 quarters = 1 year (annual)
         bondQuarterBps = 250; // 2.5% of principal per quarter
 
         // Default instruments setup
@@ -257,7 +255,6 @@ contract BizSwap is
     }
 
     function configureSchedules(
-        uint64 creditFirstPayment_,
         uint64 creditWeekSeconds_,
         uint8 creditWeekCount_,
         uint256 creditTotalReturnBps_,
@@ -273,7 +270,6 @@ contract BizSwap is
             revert InvalidSchedule();
         }
 
-        creditFirstPayment = creditFirstPayment_;
         creditWeekSeconds = creditWeekSeconds_;
         creditWeekCount = creditWeekCount_;
         creditTotalReturnBps = creditTotalReturnBps_;
@@ -282,7 +278,6 @@ contract BizSwap is
         bondQuarterBps = bondQuarterBps_;
 
         emit SchedulesConfigured(
-            creditFirstPayment_,
             creditWeekSeconds_,
             creditWeekCount_,
             creditTotalReturnBps_,
@@ -569,7 +564,7 @@ contract BizSwap is
         uint256 weeklyRaw = AmountCodec.centsToRaw(weeklyCents, usdcDecimals);
 
         for (uint8 w = start; w < creditWeekCount; ++w) {
-            uint64 payTime = creditFirstPayment + uint64(uint256(w) * uint256(creditWeekSeconds));
+            uint64 payTime = cert.purchaseTime + uint64(uint256(w + 1) * uint256(creditWeekSeconds));
             if (block.timestamp < payTime) break;
             uint256 thisWeekRaw = weeklyRaw;
             if (w == creditWeekCount - 1 && remainderCents > 0) {
@@ -607,11 +602,15 @@ contract BizSwap is
 
         uint256 quarterCents = (cert.amountCents * bondQuarterBps) / BPS_DENOMINATOR;
         uint256 quarterRaw = AmountCodec.centsToRaw(quarterCents, usdcDecimals);
+        uint256 principalRaw = AmountCodec.centsToRaw(cert.amountCents, usdcDecimals);
 
         for (uint8 q = start; q < bondMaxQuarters; ++q) {
             uint64 payTime = cert.yieldStart + uint64(uint256(q) * uint256(bondQuarterSeconds));
             if (block.timestamp < payTime) break;
             dueRaw += quarterRaw;
+            if (q == bondMaxQuarters - 1) {
+                dueRaw += principalRaw;
+            }
             quartersToPay++;
         }
     }

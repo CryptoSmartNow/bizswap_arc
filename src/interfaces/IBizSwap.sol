@@ -59,7 +59,6 @@ interface IBizSwap {
     event RevenueWalletUpdated(address indexed revenueWallet);
 
     event SchedulesConfigured(
-        uint64 creditFirstPayment,
         uint64 creditWeekSeconds,
         uint8 creditWeekCount,
         uint256 creditTotalReturnBps,
